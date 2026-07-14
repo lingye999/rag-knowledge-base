@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 虚拟环境
+.venv/
+
+# IDE
+.idea/
+
+# 数据文件（自动生成的索引快照，不提交）
+data/*.faiss
+data/*.npy
+data/*.json
+
+# 模型缓存（运行时会自动下载到用户目录）
+.huggingface/
