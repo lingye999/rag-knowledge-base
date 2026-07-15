@@ -218,6 +218,10 @@ __marimo__/
 .streamlit/secrets.toml
 
 # ── 项目自有 ──
+# IDE 配置
+.vscode/
+.idea/
+
 # 虚拟环境
 .venv/
 
