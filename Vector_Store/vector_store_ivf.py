@@ -15,16 +15,8 @@ class IvfVectorStore(BaseVectorStore):
         self.is_trained = False
 
     def add(self, text: str, vector: list[float]):
-        vec = self._to_normalized([vector])
-        if not self.is_trained:
-            nlist = 1
-            quantizer = faiss.IndexFlatIP(self.dimension)
-            self.index = faiss.IndexIVFFlat(quantizer, self.dimension, nlist, faiss.METRIC_INNER_PRODUCT)
-            self.index.nprobe = 1
-            self.index.train(vec)
-            self.is_trained = True
-        self.index.add(vec)
-        self.texts.append(text)
+        # 统一走 add_batch 路径，避免单条插入时创建低质量索引
+        self.add_batch([text], [vector])
 
     def add_batch(self, texts: list[str], vectors: list[list[float]]):
         vecs = self._to_normalized(vectors)
@@ -42,7 +34,13 @@ class IvfVectorStore(BaseVectorStore):
     def add_from_file(self, file_path: str, embedding_service, chunk_method: str = "sentence"):
         text = read_file(file_path)
         chunks = chunk_text(text, chunk_method)
+        if not chunks:
+            print(f"[警告] 文件 {file_path} 未提取到有效文本块，已跳过")
+            return
         vectors = embedding_service.encode_batch(chunks)
+        if not vectors:
+            print(f"[警告] 文件 {file_path} 向量化失败，已跳过")
+            return
         self.add_batch(chunks, vectors)
         print(f"文件 {file_path} 加载完成: {len(chunks)} 个文本块")
 

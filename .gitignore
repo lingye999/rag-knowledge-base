@@ -236,3 +236,7 @@ data/*.json
 # 测试数据文件
 data/*.docx
 data/*.pdf
+
+# 本地参考文档（不上传）
+5天压缩路线图.md
+知识库体系设计方案.html

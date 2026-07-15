@@ -30,7 +30,16 @@ class EmbeddingService:
 
     def encode_batch(self, texts: list[str]) -> list[list[float]]:
         """批量文本 → 向量列表"""
-        return [v.tolist() for v in self.model.embed(texts)]
+        if not texts:
+            print("[警告] 传入空文本列表，跳过编码")
+            return []
+        # 分批处理，避免单次过大
+        batch_size = 256
+        results = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            results.extend([v.tolist() for v in self.model.embed(batch)])
+        return results
 
     @property
     def dimension(self) -> int:
