@@ -232,3 +232,7 @@ data/*.json
 
 # 模型缓存
 .huggingface/
+
+# 测试数据文件
+data/*.docx
+data/*.pdf
