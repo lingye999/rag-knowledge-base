@@ -1,32 +1,32 @@
 import re
 import os
+import io
+import numpy as np
 import jieba
 import docx
 import fitz
+import pdfplumber
 
 
-def read_file(path: str) -> str:
+def read_file(path: str, force_ocr: bool = False) -> str:
     """根据文件后缀自动选择读取方式，支持 txt/docx/pdf"""
-    # 检查文件是否存在
     if not os.path.exists(path):
         raise FileNotFoundError(f"文件不存在: {path}")
 
     if path.endswith(".txt"):
-        # 自动检测编码：先试 UTF-8，失败则试常见中文编码
         for encoding in ["utf-8", "gbk", "gb2312", "gb18030"]:
             try:
                 with open(path, "r", encoding=encoding) as f:
                     return f.read()
             except (UnicodeDecodeError, UnicodeError):
                 continue
-        # 所有编码都失败，最后用 utf-8 抛原始异常
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
     elif path.endswith(".docx"):
         return read_docx(path)
     elif path.endswith(".pdf"):
-        return read_pdf(path)
+        return read_pdf(path, force_ocr=force_ocr)
     else:
         raise ValueError(f"不支持的文件格式: {path}，仅支持 .txt / .docx / .pdf")
 
@@ -56,48 +56,95 @@ def read_docx(path: str) -> str:
     return result
 
 
-def read_pdf(path: str) -> str:
-    """读取pdf文本"""
+def read_pdf(path: str, force_ocr: bool = False) -> str:
+    """读取pdf文本：默认 pdfplumber 优先，force_ocr=True 时优先 OCR"""
+    if force_ocr:
+        # ── OCR 优先模式 ──────────────────────────────────
+        result = _read_pdf_ocr(path)
+        if result and result.strip():
+            return result
+        # OCR 失败，退回 pdfplumber
+        result = _read_pdf_plumber(path)
+        if result and result.strip():
+            return result
+        raise RuntimeError(f"无法提取 PDF 文字（已尝试 OCR + 文本提取）: {path}")
+
+    # ── 默认模式：pdfplumber 优先 ────────────────────────
+    result = _read_pdf_plumber(path)
+    if result and result.strip():
+        return result
+
+    # OCR 兜底
+    result = _read_pdf_ocr(path)
+    if result and result.strip():
+        return result
+
+    raise RuntimeError(f"无法提取 PDF 文字（已尝试文本提取 + OCR）: {path}")
+
+
+def _read_pdf_plumber(path: str) -> str:
+    """pdfplumber 文本提取"""
     try:
+        with pdfplumber.open(path) as pdf:
+            pages = []
+            empty_pages = 0
+            total_pages = len(pdf.pages)
+            for page in pdf.pages:
+                text = page.extract_text()
+                page_text = text.strip() if text else ""
+                is_garbage = _is_garbage_page(page_text)
+
+                if not is_garbage:
+                    if page_text:
+                        pages.append(page_text)
+                else:
+                    empty_pages += 1
+
+                if not is_garbage:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        rows = []
+                        for row in table:
+                            cells = [c.strip() if c else "" for c in row]
+                            line = " | ".join(cells)
+                            noise_ratio = sum(1 for c in line if c in "√/|0123456789 ") / len(line) if line else 1
+                            if noise_ratio > 0.6:
+                                continue
+                            rows.append(line)
+                        if rows:
+                            pages.append("\n".join(rows))
+
+            result = "\n".join(pages)
+            result = clean_table_noise(result)
+            empty_ratio = empty_pages / total_pages if total_pages > 0 else 1
+            if result.strip() and empty_ratio < 0.5:
+                return result
+    except Exception:
+        pass
+    return ""
+
+
+def _read_pdf_ocr(path: str) -> str:
+    """EasyOCR 图片识别"""
+    try:
+        import easyocr
+
         doc = fitz.open(path)
-    except Exception as e:
-        raise RuntimeError(f"无法打开 PDF 文件（可能已加密、损坏或不是有效 PDF）: {path}") from e
+        reader = easyocr.Reader(['ch_sim', 'en'])
+        pages = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=200)
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            result = reader.readtext(img)
+            line_texts = [text for _, text, conf in result if conf > 0.3]
+            pages.append("".join(line_texts))
 
-    # 检查 PDF 是否需要密码（加密检测）
-    if doc.is_encrypted:
         doc.close()
-        raise RuntimeError(f"PDF 文件已加密，无法读取（需要密码）: {path}")
-
-    page_count = len(doc)
-    if page_count == 0:
-        doc.close()
-        print(f"[警告] PDF 文件无页面: {path}")
+        result = "\n".join(pages)
+        result = clean_table_noise(result)
+        return result if result.strip() else ""
+    except Exception:
         return ""
-
-    # 大文件警告
-    if page_count > 500:
-        print(f"[警告] PDF 页数较多 ({page_count} 页)，可能需要较长时间...")
-
-    pages = []
-    empty_pages = 0
-    for page in doc:
-        text = page.get_text()
-        if text.strip():
-            pages.append(text)
-        else:
-            empty_pages += 1
-
-    doc.close()
-
-    result = "\n".join(pages)
-
-    # 如果所有页面都是空的（扫描件/纯图片 PDF）
-    if not result.strip():
-        print(f"[警告] PDF 全部 {page_count} 页均未提取到文字（可能是扫描件/纯图片 PDF，需要 OCR）: {path}")
-    elif empty_pages > 0:
-        print(f"[提示] PDF 共 {page_count} 页，其中 {empty_pages} 页无文字")
-
-    return result
 
 
 def chunk_by_sentence(text: str) -> list[str]:
@@ -177,6 +224,62 @@ def chunk_text(text: str, method: str = "auto") -> list[str]:
         return chunk_by_size(text)
     else:
         raise ValueError(f"不支持的分块方法: {method}，可选: sentence / paragraph / jieba / size / auto")
+
+
+def clean_table_noise(text: str) -> str:
+    """清洗 pdfplumber 表格提取产生的脏数据"""
+    import re
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        s = line.strip()
+        # 去掉空行
+        if not s:
+            continue
+        # 去掉纯符号行（√ / | 等）
+        if all(c in "√/| " for c in s):
+            continue
+        # 去掉" | " 和 "/ " 这种单元格分隔符，保留文字
+        s = s.replace(" | ", " ").replace("/ ", " ")
+        # 去掉孤立的 "|"
+        s = s.replace(" |", "").replace("| ", "")
+        # 去掉行首行尾的 |（表格边框残余）
+        s = s.strip("| ")
+        # 去掉超短的碎片行（≤3个字符且不含中文）
+        if len(s) <= 3 and not re.search(r'[\u4e00-\u9fff]', s):
+            continue
+        # 去掉一半以上都是数字+符号的行（技术图纸标注）
+        no_alpha = sum(1 for c in s if c in "0123456789/\\-CDVYEABPJ ")
+        if len(s) > 3 and no_alpha / len(s) > 0.7:
+            continue
+        if s:
+            cleaned.append(s)
+    return "\n".join(cleaned)
+
+
+def _is_garbage_page(text: str) -> bool:
+    """判断一页提取的文本是否是垃圾（技术图纸标注），是则跳过"""
+    if not text or not text.strip():
+        return True
+    # 去除空白后长度
+    stripped = text.strip()
+    if len(stripped) < 20:
+        return False  # 短文本交给 empty_ratio 判断
+
+    # 中文占比 < 15% → 技术图纸
+    chinese = sum(1 for c in stripped if '\u4e00' <= c <= '\u9fff')
+    ch_ratio = chinese / len(stripped)
+    if ch_ratio < 0.15:
+        return True
+
+    # "单词"平均字符数 < 2（全是碎片，如 "流 aking cu 2 rr 0 en"）
+    words = stripped.split()
+    if words:
+        avg_word_len = sum(len(w) for w in words) / len(words)
+        if avg_word_len < 2.5:
+            return True
+
+    return False
 
 
 def filter_stopwords(words: list[str]) -> list[str]:
