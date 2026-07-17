@@ -36,16 +36,42 @@ def main():
     log.info(f"向量搜索系统已启动（当前索引: {current_type}，/help 查看帮助）")
     hybrid = HybridRetriever(emb.dimension)
 
-    # LLM 初始化（容错：没 API Key 也能启动）
+    # ── LLM 初始化（双模型分层策略） ──────────────────
+    # 付费模型（DeepSeek V4 Flash）：用于 /ask 生成回答，质量要求高
     try:
         llm = LLMService(
             api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
             model="deepseek-v4-flash"
         )
-        log.info("LLM 服务已就绪（DeepSeek V4 Flash）")
+        log.info("LLM 已就绪（DeepSeek V4 Flash · 付费 · 问答）")
     except ValueError as e:
         llm = None
-        log.warning(f"LLM 未配置: {e}")
+        log.warning(f"DeepSeek 未配置: {e}")
+
+    # 免费模型（OpenRouter Gemini Flash）：用于改写/Self-Querying，简单任务够用
+    try:
+        rewrite_llm = LLMService(
+            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            model="google/gemini-2.0-flash-exp:free",
+            base_url="https://openrouter.ai/api/v1"
+        )
+        log.info("改写LLM 已就绪（OpenRouter Gemini Flash · 免费 · 改写/分类）")
+    except ValueError:
+        rewrite_llm = None
+        log.warning("OpenRouter 未配置，改写功能将使用原始查询")
+
+    def _rewrite(query: str) -> str:
+        """自动改写查询：LLM 可用时改写，不可用时返回原始"""
+        if rewrite_llm is None:
+            return query
+        try:
+            rewritten = rewrite_llm.rewrite(query)
+            if rewritten and not rewritten.startswith("[改写失败"):
+                log.info(f"改写: {query} → {rewritten}")
+                return rewritten
+        except Exception:
+            pass
+        return query
 
     while True:
         cmd = input().strip()
@@ -82,6 +108,8 @@ def main():
                 query = rest
                 top_k = 5
 
+            # Step 3.1: 自动改写查询
+            query = _rewrite(query)
             vec = emb.encode(query)
             t0 = time.time()
             results = db.search(vec, top_k=top_k)
@@ -100,6 +128,7 @@ def main():
                 query = rest
                 top_k = 5
 
+            query = _rewrite(query)
             words = jieba.lcut(query)
             segmented = " ".join(words)
             print(f"分词结果: {segmented}")
@@ -121,6 +150,7 @@ def main():
                 query = rest
                 top_k = 5
 
+            query = _rewrite(query)
             vec = emb.encode(query)
             tokens = jieba.lcut(query)
             t0 = time.time()
@@ -132,12 +162,13 @@ def main():
 
         elif cmd.startswith("/ask "):
             if llm is None:
-                print("LLM 未配置。请检查 API Key 是否正确")
+                print("LLM 未配置。请先设置 DEEPSEEK_API_KEY 环境变量")
                 continue
             query = cmd[len("/ask "):].strip()
 
-            # 1. 检索
-            vec = emb.encode(query)
+            # 改写后检索（提升召回质量），但用原始问题问 LLM
+            search_query = _rewrite(query)
+            vec = emb.encode(search_query)
             t0 = time.time()
             chunks = [r["text"] for r in db.search(vec, top_k=8)]
             t1 = time.time()
