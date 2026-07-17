@@ -1,6 +1,9 @@
 """纯 OCR 读取测试：对比 pdfplumber vs OCR 的文字质量"""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
-from document_loader import read_file, chunk_text
+from src.document import read_file
+from src.chunker import chunk_text
 
 PDF_PATH = "data/E-VAC固封系列中压真空断路器-中文-2024-07-09.pdf"
 

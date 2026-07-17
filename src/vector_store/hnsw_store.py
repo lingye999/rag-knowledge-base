@@ -1,14 +1,17 @@
 import faiss
 import json
-from .base_vector_store import BaseVectorStore
-from document_loader import read_file, chunk_text
+from .base import BaseVectorStore
+from ..document import read_file
+from ..chunker import chunk_text
 
 
-class FaissVectorStore(BaseVectorStore):
-    def __init__(self, dimension: int):
+class HnswVectorStore(BaseVectorStore):
+    def __init__(self, dimension: int, M: int = 32):
         self.dimension = dimension
-        self.index = faiss.IndexFlatIP(dimension)
         self.texts = []
+        self.index = faiss.IndexHNSWFlat(dimension, M, faiss.METRIC_INNER_PRODUCT)
+        self.index.hnsw.efConstruction = 128
+        self.index.hnsw.efSearch = 64
 
     def add(self, text: str, vector: list[float]):
         vec = self._to_normalized([vector])

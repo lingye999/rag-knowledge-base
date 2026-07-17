@@ -1,24 +1,33 @@
 import faiss
 import json
-from .base_vector_store import BaseVectorStore
-from document_loader import read_file, chunk_text
+from .base import BaseVectorStore
+from ..document import read_file
+from ..chunker import chunk_text
 
 
-class HnswVectorStore(BaseVectorStore):
-    def __init__(self, dimension: int, M: int = 32):
+class IvfVectorStore(BaseVectorStore):
+    def __init__(self, dimension: int, nlist: int = 100):
         self.dimension = dimension
         self.texts = []
-        self.index = faiss.IndexHNSWFlat(dimension, M, faiss.METRIC_INNER_PRODUCT)
-        self.index.hnsw.efConstruction = 128
-        self.index.hnsw.efSearch = 64
+        self.nlist = nlist
+        quantizer = faiss.IndexFlatIP(dimension)
+        self.index = faiss.IndexIVFFlat(quantizer, dimension, nlist, faiss.METRIC_INNER_PRODUCT)
+        self.index.nprobe = 10
+        self.is_trained = False
 
     def add(self, text: str, vector: list[float]):
-        vec = self._to_normalized([vector])
-        self.index.add(vec)
-        self.texts.append(text)
+        self.add_batch([text], [vector])
 
     def add_batch(self, texts: list[str], vectors: list[list[float]]):
         vecs = self._to_normalized(vectors)
+        if not self.is_trained:
+            n_train = len(vecs)
+            nlist = min(self.nlist, n_train)
+            quantizer = faiss.IndexFlatIP(self.dimension)
+            self.index = faiss.IndexIVFFlat(quantizer, self.dimension, nlist, faiss.METRIC_INNER_PRODUCT)
+            self.index.nprobe = min(10, nlist)
+            self.index.train(vecs)
+            self.is_trained = True
         self.index.add(vecs)
         self.texts.extend(texts)
 
@@ -50,5 +59,6 @@ class HnswVectorStore(BaseVectorStore):
     def load(self, path: str):
         self.index = faiss.read_index(f"{path}.faiss")
         self.dimension = self.index.d
+        self.is_trained = True
         with open(f"{path}_texts.json", "r", encoding="utf-8") as f:
             self.texts = json.load(f)
