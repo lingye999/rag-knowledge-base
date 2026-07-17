@@ -9,9 +9,9 @@ from .vector_store.faiss_store import FaissVectorStore
 from .vector_store.ivf_store import IvfVectorStore
 from .vector_store.hnsw_store import HnswVectorStore
 from .vector_store.hybrid import HybridRetriever
-from .document import read_file
-from .chunker import chunk_text
 from .llm_service import LLMService
+from .retriever import Retriever
+from .ingestion import IngestionService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +37,7 @@ def run():
     else:
         db = FaissVectorStore(emb.dimension)
     log.info(f"向量搜索系统已启动（当前索引: {current_type}，/help 查看帮助）")
-    hybrid = HybridRetriever(emb.dimension)
+    hybrid = HybridRetriever(db)
 
     # LLM 初始化（容错：没 API Key 也能启动）
     try:
@@ -49,6 +49,10 @@ def run():
     except ValueError as e:
         llm = None
         log.warning(f"LLM 未配置: {e}")
+
+    # 入库 + 检索引擎
+    ingestion = IngestionService(emb, db, hybrid)
+    retriever = Retriever(db)
 
     def _rewrite(query: str) -> str:
         """自动改写查询：LLM 可用时改写，不可用时返回原始"""
@@ -81,6 +85,7 @@ def run():
             print("  /add <file> ocr      - 强制 OCR 模式添加")
             print("  /count               - 查看总数")
             print("  /switch <type>       - 切换索引: flat / ivf / hnsw")
+            print("  /delete <doc_name>   - 标记删除文档（/save 后永久生效）")
             print("  /save <path>         - 保存")
             print("  /load <path>         - 加载")
             print("  /exit                - 退出")
@@ -99,13 +104,21 @@ def run():
                 top_k = 5
 
             query = _rewrite(query)
-            vec = emb.encode(query)
+            doc_filter = None
+            if llm is not None:
+                sq, filters = llm.self_query(query)
+                if filters.get("doc"):
+                    doc_filter = filters["doc"]
+                    log.info(f"限定文档: {doc_filter}")
+                query = sq
+
             t0 = time.time()
-            results = db.search(vec, top_k=top_k)
+            vec = emb.encode(query)
+            results = retriever.search(vec, top_k=top_k, doc_filter=doc_filter)
             t1 = time.time()
             print(f"搜索耗时: {(t1-t0)*1000:.1f}ms")
             for i, r in enumerate(results):
-                print(f"{i+1}. [{r['score']:.4f}] {r['text']}")
+                print(f"{i+1}. [{r['score']:.4f}] [{r['doc']}] {r['text']}")
 
         elif cmd.startswith("/search_jieba "):
             rest = cmd[len("/search_jieba "):].strip()
@@ -121,13 +134,20 @@ def run():
             words = jieba.lcut(query)
             segmented = " ".join(words)
             print(f"分词结果: {segmented}")
-            vec = emb.encode(segmented)
+            doc_filter = None
+            if llm is not None:
+                sq, filters = llm.self_query(query)
+                if filters.get("doc"):
+                    doc_filter = filters["doc"]
+                query = sq
+
             t0 = time.time()
-            results = db.search(vec, top_k=top_k)
+            vec = emb.encode(segmented)
+            results = retriever.search(vec, top_k=top_k, doc_filter=doc_filter)
             t1 = time.time()
             print(f"搜索耗时: {(t1-t0)*1000:.1f}ms")
             for i, r in enumerate(results):
-                print(f"{i+1}. [{r['score']:.4f}] {r['text']}")
+                print(f"{i+1}. [{r['score']:.4f}] [{r['doc']}] {r['text']}")
 
         elif cmd.startswith("/hybrid_search "):
             rest = cmd[len("/hybrid_search "):].strip()
@@ -140,25 +160,47 @@ def run():
                 top_k = 5
 
             query = _rewrite(query)
-            vec = emb.encode(query)
-            tokens = jieba.lcut(query)
+            doc_filter = None
+            if llm is not None:
+                sq, filters = llm.self_query(query)
+                if filters.get("doc"):
+                    doc_filter = filters["doc"]
+                query = sq
+
             t0 = time.time()
-            results = hybrid.search(vec, tokens, top_k=top_k)
+            tokens = jieba.lcut(query)
+            vec = emb.encode(query)
+            raw = hybrid.search(vec, tokens, top_k=top_k * 5)
+            if doc_filter:
+                raw = [r for r in raw if db.meta[r["index"]].get("doc") == doc_filter]
+            if not raw:
+                print("无结果")
+                continue
+            raw = sorted(raw, key=lambda x: x["score"], reverse=True)[:top_k]
             t1 = time.time()
             print(f"混合检索耗时: {(t1-t0)*1000:.1f}ms")
-            for i, r in enumerate(results):
-                print(f"{i+1}. [hybrid {r['score']:.4f}] {r['text']}")
+            for i, r in enumerate(raw):
+                doc = db.meta[r["index"]].get("doc", "未知")
+                print(f"{i+1}. [hybrid {r['score']:.4f}] [{doc}] {r['text']}")
 
         elif cmd.startswith("/ask "):
             if llm is None:
                 print("LLM 未配置。请检查 API Key 是否正确")
                 continue
             query = cmd[len("/ask "):].strip()
-
             search_query = _rewrite(query)
-            vec = emb.encode(search_query)
+
+            doc_filter = None
+            if llm is not None:
+                sq, filters = llm.self_query(search_query)
+                if filters.get("doc"):
+                    doc_filter = filters["doc"]
+                search_query = sq
+
             t0 = time.time()
-            chunks = [r["text"] for r in db.search(vec, top_k=8)]
+            vec = emb.encode(search_query)
+            results = retriever.search(vec, top_k=8, doc_filter=doc_filter)
+            chunks = [r["text"] for r in results]
             t1 = time.time()
             log.info(f"检索到 {len(chunks)} 条，耗时 {(t1-t0)*1000:.1f}ms")
 
@@ -203,34 +245,39 @@ def run():
                 else:
                     log.info(f"已切换到 {idx_type} 索引（当前为空）")
 
+                # 更新检索引擎指向新索引
+                retriever.db = db
+                hybrid.db = db
+                ingestion.db = db
+                ingestion.hybrid = hybrid
+
                 current_type = idx_type
+
+        elif cmd.startswith("/delete "):
+            doc_name = cmd[len("/delete "):].strip()
+            db.delete_doc(doc_name)
+            log.info(f"文档 {doc_name} 已标记删除（/save 后永久生效）")
 
         elif cmd.startswith("/add "):
             try:
                 rest = cmd[len("/add "):].strip()
                 parts = rest.split(" ")
                 path = parts[0]
-                method = parts[1] if len(parts) > 1 else "auto"
-                force_ocr = False
-                if len(parts) > 2 and parts[2] == "ocr":
-                    force_ocr = True
-                elif len(parts) == 2 and parts[1] == "ocr":
-                    force_ocr = True
-                    method = "auto"
-
-                text = read_file(path, force_ocr=force_ocr)
-                chunks = chunk_text(text, method)
-                vectors = emb.encode_batch(chunks)
-                db.add_batch(chunks, vectors)
-                hybrid.add_texts(chunks, vectors)
-                mode = "OCR模式" if force_ocr else "默认"
-                log.info(f"文件 {path} 加载完成({mode}): {len(chunks)} 个文本块")
+                if not path:
+                    print("用法: /add <文件路径> [ocr]")
+                    continue
+                method = parts[1] if len(parts) > 1 and parts[1] != "ocr" else "auto"
+                force_ocr = "ocr" in parts
+                n, fname = ingestion.add(path, chunk_method=method, force_ocr=force_ocr)
+                if n:
+                    log.info(f"文件 {fname} 入库完成: {n} 个文本块")
             except Exception as e:
                 log.error(f"添加失败: {e}")
 
         elif cmd.startswith("/save "):
             try:
                 path = cmd[len("/save "):].strip()
+                db._compact()
                 db.save(path)
                 log.info(f"已保存到 {path}")
             except Exception as e:

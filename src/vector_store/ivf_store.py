@@ -1,14 +1,18 @@
 import faiss
 import json
 from .base import BaseVectorStore
-from ..document import read_file
-from ..chunker import chunk_text
 
 
 class IvfVectorStore(BaseVectorStore):
     def __init__(self, dimension: int, nlist: int = 100):
         self.dimension = dimension
         self.texts = []
+        self.doc_registry: dict[str, list[int]] = {}  # 文档名 → FAISS 位置列表
+        self.meta: list[dict] = []  # 每个位置对应的来源信息
+        self.deleted: set[int] = set()  # 标记删除的位置集合
+        self._index_type = "ivf"       # compact 时保持索引类型
+        self._index_params = {"nlist": nlist}  # IVF 参数
+
         self.nlist = nlist
         quantizer = faiss.IndexFlatIP(dimension)
         self.index = faiss.IndexIVFFlat(quantizer, dimension, nlist, faiss.METRIC_INNER_PRODUCT)
@@ -18,7 +22,9 @@ class IvfVectorStore(BaseVectorStore):
     def add(self, text: str, vector: list[float]):
         self.add_batch([text], [vector])
 
-    def add_batch(self, texts: list[str], vectors: list[list[float]]):
+    def add_batch(self, texts: list[str], vectors: list[list[float]],doc_name: str | None = None):
+        start = len(self.texts)
+
         vecs = self._to_normalized(vectors)
         if not self.is_trained:
             n_train = len(vecs)
@@ -31,18 +37,12 @@ class IvfVectorStore(BaseVectorStore):
         self.index.add(vecs)
         self.texts.extend(texts)
 
-    def add_from_file(self, file_path: str, embedding_service, chunk_method: str = "sentence"):
-        text = read_file(file_path)
-        chunks = chunk_text(text, chunk_method)
-        if not chunks:
-            print(f"[警告] 文件 {file_path} 未提取到有效文本块，已跳过")
-            return
-        vectors = embedding_service.encode_batch(chunks)
-        if not vectors:
-            print(f"[警告] 文件 {file_path} 向量化失败，已跳过")
-            return
-        self.add_batch(chunks, vectors)
-        print(f"文件 {file_path} 加载完成: {len(chunks)} 个文本块")
+        # 如果传入了文档的这个名字，维护doc和meta
+        if doc_name is not None:
+            indices = list(range(start, start + len(texts)))  # 新 chunk 在 FAISS/texts 中的位置范围
+            self.doc_registry[doc_name] = indices  # 文档名 → 位置范围映射
+            for _ in texts:
+                self.meta.append({"doc": doc_name})
 
     def search(self, query_vec: list[float], top_k: int = 5) -> list[dict]:
         return self._run_search(self.index, query_vec, top_k)
@@ -53,12 +53,23 @@ class IvfVectorStore(BaseVectorStore):
 
     def save(self, path: str):
         faiss.write_index(self.index, f"{path}.faiss")
+        data = {
+            "texts": self.texts,
+            "doc_registry": self.doc_registry,
+            "meta": self.meta,
+        }
         with open(f"{path}_texts.json", "w", encoding="utf-8") as f:
-            json.dump(self.texts, f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False)
 
     def load(self, path: str):
         self.index = faiss.read_index(f"{path}.faiss")
         self.dimension = self.index.d
         self.is_trained = True
         with open(f"{path}_texts.json", "r", encoding="utf-8") as f:
-            self.texts = json.load(f)
+            data = json.load(f)
+        if isinstance(data, list):
+            self.texts = data
+        else:
+            self.texts = data["texts"]
+            self.doc_registry = data.get("doc_registry", {})
+            self.meta = data.get("meta", [])
