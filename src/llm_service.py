@@ -1,5 +1,6 @@
 from openai import OpenAI
 import os
+import json
 
 # 默认配置（DeepSeek 官方 API）
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -81,3 +82,50 @@ class LLMService:
             return resp.choices[0].message.content.strip()
         except Exception as e:
             return f"[改写失败: {e}] 原始: {query}"
+
+    def self_query(self, query: str) -> tuple[str, dict]:
+        """从自然语言中提取搜索关键词和过滤条件
+
+        返回:
+            (semantic_query, filters)
+            semantic_query: 去掉过滤词后的核心搜索词
+            filters: 过滤条件 dict，如 {"doc": "说明书.pdf"}
+        """
+        system_prompt = (
+            "你是一个查询意图分析助手。"
+            "从用户的查询中提取搜索关键词和过滤条件。\n"
+            "规则：\n"
+            "1. semantic_query：去掉过滤意图后的核心搜索词\n"
+            "2. filters：如果用户提到具体文档名则填入 doc 字段，否则为空对象\n"
+            "只返回 JSON，格式：{\"semantic_query\": \"核心搜索词\", \"filters\": {}}"
+        )
+        user_prompt = f"分析查询意图：{query}"
+
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=256,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # 尝试解析 JSON，如果失败则尝试从文本中提取 JSON 部分
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                import re
+                match = re.search(r'\{.*\}', raw, re.DOTALL)
+                if match:
+                    result = json.loads(match.group())
+                else:
+                    result = {"semantic_query": query, "filters": {}}
+
+            semantic_query = result.get("semantic_query", query)
+            filters = result.get("filters", {})
+            return semantic_query, filters
+
+        except Exception as e:
+            return query, {}
