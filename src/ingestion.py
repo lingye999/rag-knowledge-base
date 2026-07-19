@@ -1,8 +1,9 @@
-"""文档入库：读取 → 分块 → 向量化 → 入库（封装完整流程）"""
+"""文档入库：读取 → 清洗 → 分块 → 向量化 → 入库"""
 
 import os
 from .document import read_file
 from .chunker import chunk_text
+from .cleaner import clean_ocr_text
 
 
 class IngestionService:
@@ -29,6 +30,7 @@ class IngestionService:
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
         text = read_file(file_path, force_ocr=force_ocr)
+        text = clean_ocr_text(text)  # 清洗 OCR 残留空白和 HTML 标签
         chunks = chunk_text(text, chunk_method)
         if not chunks:
             print(f"[警告] 文件 {file_path} 未提取到有效文本块，已跳过")

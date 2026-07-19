@@ -12,6 +12,7 @@ from .vector_store.hybrid import HybridRetriever
 from .llm_service import LLMService
 from .retriever import Retriever
 from .ingestion import IngestionService
+from .reranker import Reranker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,9 +51,15 @@ def run():
         llm = None
         log.warning(f"LLM 未配置: {e}")
 
-    # 入库 + 检索引擎
+    # 入库 + 检索引擎 + 重排序
     ingestion = IngestionService(emb, db, hybrid)
-    retriever = Retriever(db)
+    try:
+        reranker = Reranker("BAAI/bge-reranker-base", device="cuda")
+        log.info("重排序器已就绪（Cross-Encoder）")
+    except Exception as e:
+        reranker = None
+        log.warning(f"重排序器加载失败，将跳过精排: {e}")
+    retriever = Retriever(db, reranker=reranker)
 
     def _rewrite(query: str) -> str:
         """自动改写查询：LLM 可用时改写，不可用时返回原始"""
@@ -114,7 +121,7 @@ def run():
 
             t0 = time.time()
             vec = emb.encode(query)
-            results = retriever.search(vec, top_k=top_k, doc_filter=doc_filter)
+            results = retriever.search(query, vec, top_k=top_k, doc_filter=doc_filter)
             t1 = time.time()
             print(f"搜索耗时: {(t1-t0)*1000:.1f}ms")
             for i, r in enumerate(results):
@@ -143,7 +150,7 @@ def run():
 
             t0 = time.time()
             vec = emb.encode(segmented)
-            results = retriever.search(vec, top_k=top_k, doc_filter=doc_filter)
+            results = retriever.search(query, vec, top_k=top_k, doc_filter=doc_filter)
             t1 = time.time()
             print(f"搜索耗时: {(t1-t0)*1000:.1f}ms")
             for i, r in enumerate(results):
@@ -176,6 +183,11 @@ def run():
             if not raw:
                 print("无结果")
                 continue
+
+            # Cross-Encoder 精排
+            if reranker and raw:
+                raw = reranker.rerank(query, raw, top_k=top_k)
+
             raw = sorted(raw, key=lambda x: x["score"], reverse=True)[:top_k]
             t1 = time.time()
             print(f"混合检索耗时: {(t1-t0)*1000:.1f}ms")
@@ -199,7 +211,7 @@ def run():
 
             t0 = time.time()
             vec = emb.encode(search_query)
-            results = retriever.search(vec, top_k=8, doc_filter=doc_filter)
+            results = retriever.search(search_query, vec, top_k=8, doc_filter=doc_filter)
             chunks = [r["text"] for r in results]
             t1 = time.time()
             log.info(f"检索到 {len(chunks)} 条，耗时 {(t1-t0)*1000:.1f}ms")
@@ -229,8 +241,15 @@ def run():
             else:
                 n = db.count
                 old_texts = db.texts[:]
+                old_registry = getattr(db, 'doc_registry', {}).copy()
+                old_meta = getattr(db, 'meta', []).copy()
                 old_vecs = np.zeros((n, db.dimension), dtype=np.float32)
-                db.index.reconstruct_n(0, n, old_vecs)
+                # reconstruct_n 仅 IndexFlat 支持，IVF/HNSW 逐条
+                try:
+                    db.index.reconstruct_n(0, n, old_vecs)
+                except RuntimeError:
+                    for i in range(n):
+                        old_vecs[i] = db.index.reconstruct(i)
 
                 if idx_type == "ivf":
                     db = IvfVectorStore(emb.dimension)
@@ -241,13 +260,18 @@ def run():
 
                 if old_texts:
                     db.add_batch(old_texts, old_vecs.tolist())
+                    # 恢复文档注册信息
+                    db.doc_registry = old_registry
+                    db.meta = old_meta
+                    # 重建 BM25 索引
+                    hybrid = HybridRetriever(db)
+                    hybrid.add_texts(old_texts)
                     log.info(f"已切换到 {idx_type} 索引（已保留 {len(old_texts)} 条数据）")
                 else:
                     log.info(f"已切换到 {idx_type} 索引（当前为空）")
 
                 # 更新检索引擎指向新索引
                 retriever.db = db
-                hybrid.db = db
                 ingestion.db = db
                 ingestion.hybrid = hybrid
 

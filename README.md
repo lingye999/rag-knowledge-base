@@ -1,52 +1,70 @@
 # RAG Knowledge Base
 
-基于 FAISS 的轻量级知识库向量检索系统，支持多种文件格式导入、多策略文本分块、多索引类型切换，为 RAG（检索增强生成）场景提供知识检索基础能力。
+基于 FAISS 的智能 RAG（检索增强生成）知识库系统，支持多格式文档解析、多路混合检索、Cross-Encoder 精排、LLM 智能问答。
 
 ## 功能特性
 
-- **多格式文档解析**：支持 `.txt` / `.docx` / `.pdf` 文件导入
-- **多策略文本分块**：自动选择（auto）、按句子、按段落、按大小、jieba 分词
-- **多种向量索引**：Flat（精确）、IVF（倒排加速）、HNSW（图索引），支持运行时切换
-- **持久化存储**：索引和文本可保存/加载（FAISS 二进制格式 + JSON）
-- **CLI 交互界面**：命令行直接搜索、添加、切换索引
+- **多格式文档解析**：支持 `.txt` / `.docx` / `.pdf`，PDF 三级降级（Marker → pdfplumber → EasyOCR）
+- **多策略文本分块**：auto / sentence / paragraph / jieba / size，智能检测扫描件自动切换
+- **多路混合检索**：Dense（语义）+ BM25（关键词）双路召回 + RRF 融合
+- **Cross-Encoder 精排**：初排 → 三维加权 → Cross-Encoder 精排，层层提纯
+- **LLM 智能服务**：查询改写、自查询过滤、RAG 问答生成（DeepSeek V4 Flash）
+- **多种向量索引**：Flat / IVF / HNSW，支持运行时切换并保留数据
+- **GPU 加速**：CUDA 加速精排和 OCR（RTX 4060+）
+- **持久化存储**：FAISS 索引 + JSON 序列化，文档级元数据管理
+- **CLI 交互界面**：命令行搜索、入库、切换索引、问答
 
 ## 项目结构
 
 ```
 rag-knowledge-base/
-├── main.py                    # CLI 交互入口
-├── document_loader.py         # 文档读取 + 文本分块
-├── embedding.py               # 文本向量化服务（BGE 模型）
-├── generate_test_files.py     # 生成测试文件（.txt / .docx / .pdf）
-├── Vector_Store/
-│   ├── base_vector_store.py   # 抽象基类（统一接口规范）
-│   ├── vector_store_faiss.py  # Flat 索引（精确检索）
-│   ├── vector_store_ivf.py    # IVF 索引（倒排加速）
-│   ├── vector_store_hnsw.py   # HNSW 索引（图索引）
-│   └── simple_vector_store.py # 纯 Python 暴力检索（无 FAISS 依赖）
-└── data/                      # 测试数据目录
+├── main.py                     # CLI 入口
+├── src/
+│   ├── cli.py                  # 命令解析与主循环
+│   ├── embedding.py            # 文本向量化 (BAAI/bge-small-zh-v1.5)
+│   ├── document.py             # 多格式文档读取（三级降级）
+│   ├── chunker.py              # 文本分块（5 种策略）
+│   ├── cleaner.py              # 文本清洗 + OCR 空白清理
+│   ├── plumber.py              # pdfplumber 解析器
+│   ├── ocr.py                  # EasyOCR 兜底解析
+│   ├── marker_reader.py        # Marker AI 解析器（主力）
+│   ├── ingestion.py            # 入库流水线
+│   ├── retriever.py            # 检索引擎（召回 + 加权 + 精排）
+│   ├── reranker.py             # Cross-Encoder 精排器
+│   ├── llm_service.py          # LLM 服务（改写/自查询/问答）
+│   └── vector_store/
+│       ├── base.py             # 抽象基类
+│       ├── faiss_store.py      # Flat 精确索引
+│       ├── ivf_store.py        # IVF 倒排索引
+│       ├── hnsw_store.py       # HNSW 图索引
+│       └── hybrid.py           # Dense + BM25 混合检索
+├── tests/
+│   └── test_e2e.py             # 端到端测试
+└── data/                       # 测试数据目录
 ```
 
 ## 快速开始
 
 ### 环境要求
 
-- Python 3.8+
-- pip
+- Python 3.10+
+- NVIDIA GPU + CUDA 12.4（可选，CPU 也能跑）
 
-### 安装依赖
-
-```bash
-pip install fastembed faiss-cpu numpy jieba python-docx PyMuPDF
-```
-
-### 生成测试数据
+### 安装
 
 ```bash
-python generate_test_files.py
-```
+# 基础依赖
+pip install fastembed faiss-cpu numpy jieba python-docx PyMuPDF pdfplumber easyocr rank-bm25 openai
 
-这会在 `data/` 目录下生成三个不同主题的测试文件。
+# 精排（Day 3）
+pip install sentence-transformers
+
+# GPU 加速
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+# PDF AI 解析（Day 4）
+pip install marker-pdf
+```
 
 ### 启动
 
@@ -58,59 +76,42 @@ python main.py
 
 | 命令 | 说明 | 示例 |
 |------|------|------|
-| `/add <文件路径> [分块方法]` | 导入文件 | `/add data/AI_概述.txt auto` |
-| `/search <查询词> [top_k]` | 语义搜索 | `/search 人工智能 5` |
-| `/search_jieba <查询词> [top_k]` | 先分词再搜索 | `/search_jieba 机器学习 3` |
-| `/count` | 查看索引条数 | `/count` |
-| `/switch <索引类型>` | 切换索引 | `/switch hnsw` |
-| `/save <路径>` | 保存索引 | `/save ./backup` |
-| `/load <路径>` | 加载索引 | `/load ./backup` |
+| `/add <路径> [方法] [ocr]` | 导入文件 | `/add data/sample.txt auto` |
+| `/search <查询> [top_k]` | 语义搜索 + 精排 | `/search 机器学习 5` |
+| `/hybrid_search <查询> [top_k]` | Dense+BM25 混合检索 | `/hybrid_search 深度学习 3` |
+| `/search_jieba <查询> [top_k]` | 分词后搜索 | `/search_jieba 编程 5` |
+| `/ask <问题>` | LLM 问答 | `/ask Python是什么` |
+| `/rewrite <查询>` | LLM 查询改写 | `/rewrite 有没有AI的资料` |
+| `/switch <类型>` | 切换索引 | `/switch hnsw` |
+| `/delete <文档名>` | 删除文档 | `/delete sample.txt` |
+| `/count` | 查看总数 | `/count` |
+| `/save <路径>` | 保存 | `/save data/my_db` |
+| `/load <路径>` | 加载 | `/load data/my_db` |
 | `/help` | 帮助 | `/help` |
 | `/exit` | 退出 | `/exit` |
 
-### 分块方法
-
-| 方法 | 说明 |
-|------|------|
-| `auto` | 自动选择（根据中文占比和段落数智能判断） |
-| `sentence` | 按句号/感叹号/问号分割（支持中英文） |
-| `paragraph` | 按换行分割 |
-| `jieba` | jieba 分词后按词数分块 |
-| `size` | 固定窗口滑动分块 |
-
-### 索引类型
-
-| 类型 | 特点 | 适用场景 |
-|------|------|----------|
-| `flat` | 精确检索，内存占用大 | 小数据量（< 10万） |
-| `ivf` | 倒排索引，检索快 | 中等数据量 |
-| `hnsw` | 图索引，检索最快 | 大数据量 |
-
-## 使用示例
+## 检索流程
 
 ```
-$ python main.py
-[Embedding] 模型 BAAI/bge-small-zh-v1.5 设备 cpu 加载成功，维度: 512
-向量搜索系统已启动（当前索引: flat，/help 查看帮助）
-
-/add data/AI_概述.txt auto
-[Auto] 中文占比 99%，段落 11 个，使用 jieba 分块
-文件 data/AI_概述.txt 加载完成: 33 个文本块
-
-/search 机器学习 3
-搜索耗时: 1.2ms
-1. [0.7265] 人工智能概述...
-2. [0.6183] 机器学习是 AI 的核心技术之一...
-3. [0.5912] 深度学习是机器学习的一个子领域...
-
-/switch hnsw
-已切换到 hnsw 索引（已保留 33 条数据）
+查询 → LLM改写 → 分词/编码
+                     │
+             多路召回（Dense + BM25）
+                     │
+               RRF 融合排序
+                     │
+               三维度加权（α=0.7 β=0.1 γ=0.2）
+                     │
+            Cross-Encoder 精排（GPU）
+                     │
+               返回 top_k 结果
 ```
 
-## 后续路线
+## 后续计划
 
-- [ ] 混合检索（BM25 + Dense 双路融合 + RRF 排序）
-- [ ] LLM 智能检索（查询改写 + Self-Querying + 自动打标）
-- [ ] 入库流水线（文本清洗 + 质量评分 + SQLite 持久化）
+- [x] Dense + BM25 混合检索 + RRF 融合
+- [x] LLM 智能检索（查询改写 + Self-Querying）
+- [x] Cross-Encoder 精排
+- [x] Marker AI PDF 解析
+- [ ] SQLite 持久化 + 质量评分
 - [ ] FastAPI Web 接口
-- [ ] 知识库治理（热度衰减 + 健康巡检）
+- [ ] 知识库治理与监控
