@@ -1,86 +1,127 @@
-"""检索引擎：多路召回 → 三维度加权 → Cross-Encoder 重排序 → 阈值过滤"""
+"""检索引擎：多路召回 → 三维度加权 → Cross-Encoder 重排序 → 阈值过滤
+
+用法:
+    retriever = Retriever(db, reranker=reranker)
+    retriever.add_texts(chunks)          # 构建 BM25 索引
+    results = retriever.search(query_text, query_vec, top_k=5)
+"""
+import jieba
+import numpy as np
+from rank_bm25 import BM25Okapi
 from .reranker import Reranker
 
 
 class Retriever:
-    """统一检索引擎
-
-    用法:
-        retriever = Retriever(db, reranker=reranker)
-        results = retriever.search(query_text, query_vec, top_k=5)
-    """
+    """统一检索引擎（Dense + BM25 双路召回 → RRF → 文档聚合 → 3D → 精排）"""
 
     # 三维度权重
-    ALPHA = 0.7   # 相关性（Route A chunk 分数）
-    BETA = 0.1    # 元数据（Route B 文档排名）
-    GAMMA = 0.2   # 文档属性（质量，暂用默认值 0.8）
+    ALPHA = 0.7   # 相关性（chunk 分数）
+    BETA = 0.1    # 元数据（文档排名）
+    GAMMA = 0.2   # 文档属性（质量分，可动态）
 
-    RRF_K = 60        # RRF 常数
-    CHUNK_DECAY = 0.2 # 多切片几何衰减
+    RRF_K = 60
+    CHUNK_DECAY = 0.2
 
     def __init__(self, db, reranker: Reranker | None = None):
         self.db = db
         self.reranker = reranker
 
-    def search(self, query_text: str, query_vec: list[float], top_k: int = 5,
+        # BM25 内部索引（通过 add_texts 填充）
+        self._tokenized: list[list[str]] = []
+        self._bm25: BM25Okapi | None = None
+
+    # ── BM25 构建 ──
+
+    def add_texts(self, texts: list[str]):
+        """增量添加文本到 BM25 索引"""
+        self._tokenized.extend(jieba.lcut(t) for t in texts)
+        self._bm25 = BM25Okapi(self._tokenized)
+
+    def _rebuild_bm25(self, texts: list[str]):
+        """全量替换 BM25 索引（/switch 时使用）"""
+        self._tokenized = [jieba.lcut(t) for t in texts]
+        self._bm25 = BM25Okapi(self._tokenized)
+
+    # ── 核心检索 ──
+
+    def search(self, query_text: str,
+               query_vec: list[float],
+               top_k: int = 5,
                doc_filter: str | None = None,
                threshold: float = 0.3) -> list[dict]:
-        """完整检索流程：多路召回 → 加权 → 精排 → 过滤
+        """完整检索流程
 
-        参数:
-            query_text: 原始查询文本（供 reranker 使用）
-            query_vec: 查询向量（由调用方编码）
-            top_k: 返回结果数
-            doc_filter: 限定文档名
-            threshold: 最终分数下限
-
-        返回:
-            [{"text": ..., "score": ..., "doc": ...}, ...]
+        步骤:
+            1. Dense 召回 + BM25 召回 → RRF 融合
+            2. Route B 文档聚合 → 几何衰减
+            3. 三维度加权评分
+            4. Cross-Encoder 精排（可选）或阈值过滤
         """
-        # ── 0. 召回阶段：多拿一些候选供精排使用 ──
-        expand = 5 if self.reranker else 1   # 有精排时多召回 5 倍
+        expand = 5 if self.reranker else 1
         route_k = top_k * 5 * expand
-        route_a = self.db.search(query_vec, top_k=route_k)
+        scores: dict[int, float] = {}
 
-        # 如果有文档过滤，先缩小范围
-        if doc_filter:
-            route_a = [r for r in route_a
-                       if self.db.meta[r["index"]].get("doc") == doc_filter]
+        # ── 1a. Dense 召回 ──
+        dense_result = self.db.search(query_vec, top_k=route_k)
+        for rank, r in enumerate(dense_result):
+            scores[r["index"]] = scores.get(r["index"], 0) + 1 / (self.RRF_K + rank)
 
-        if not route_a:
+        # ── 1b. BM25 召回 ──
+        if self._bm25 is not None:
+            query_tokens = jieba.lcut(query_text)
+            bm25_scores = self._bm25.get_scores(query_tokens)
+            top_bm25 = np.argsort(bm25_scores)[::-1][:route_k]
+            for rank, idx in enumerate(top_bm25):
+                scores[idx] = scores.get(idx, 0) + 1 / (self.RRF_K + rank)
+
+        if not scores:
             return []
 
-        # ── 1. Route B: 按文档聚合 ──
+        # 按 RRF 总分排序
+        sorted_idxs = sorted(scores, key=scores.get, reverse=True)
+        fused = []
+        for i in sorted_idxs:
+            if i < len(self.db.texts):
+                fused.append({
+                    "text": self.db.texts[i],
+                    "score": scores[i],
+                    "index": i,
+                })
+
+        # 文档过滤
+        if doc_filter:
+            fused = [r for r in fused
+                     if self.db.meta[r["index"]].get("doc") == doc_filter]
+
+        if not fused:
+            return []
+
+        # ── 2. Route B：文档聚合 ──
         doc_chunks: dict[str, list[dict]] = {}
-        for r in route_a:
+        for r in fused:
             doc = self.db.meta[r["index"]].get("doc", "未知")
             doc_chunks.setdefault(doc, []).append(r)
 
         doc_scores = {}
         for doc, chunks in doc_chunks.items():
             sorted_chunks = sorted(chunks, key=lambda x: x["score"], reverse=True)
-            doc_rrf = 0.0
-            for rank, c in enumerate(sorted_chunks):
-                decay = self.CHUNK_DECAY ** rank
-                doc_rrf += c["score"] * decay
+            doc_rrf = sum(c["score"] * (self.CHUNK_DECAY ** rank)
+                          for rank, c in enumerate(sorted_chunks))
             doc_scores[doc] = doc_rrf
 
-        # ── 2. 三维度加权 ──
+        # ── 3. 三维度加权 ──
         MAX_DOC_RRF = 1.0
-
         results = []
-        for r in route_a:
+        for r in fused:
             doc = self.db.meta[r["index"]].get("doc", "未知")
 
             alpha_score = min(max(r["score"], 0.0), 1.0)
-            doc_raw = doc_scores.get(doc, 0)
-            beta_score = min(doc_raw / MAX_DOC_RRF, 1.0)
-            gamma_score = 0.8
+            beta_score = min(doc_scores.get(doc, 0) / MAX_DOC_RRF, 1.0)
+            gamma_score = self.db.meta[r["index"]].get("quality", 0.5)  # 后续可改为动态质量分
 
             final_score = (self.ALPHA * alpha_score +
                            self.BETA * beta_score +
                            self.GAMMA * gamma_score)
-
             final_score = final_score * (1 - threshold) + threshold
 
             results.append({
@@ -90,17 +131,12 @@ class Retriever:
                 "index": r["index"],
             })
 
-        # ── 3. Cross-Encoder 精排（Day 3 新增） ──
+        # ── 4a. Cross-Encoder 精排 ──
         if self.reranker and results:
-            # 先用加权分预排序，交给 reranker 精排
             results.sort(key=lambda x: x["score"], reverse=True)
-            # 取 top_k * 10 个候选送精排（不要太多，cross-encoder 慢）
             pre_candidates = results[:min(len(results), top_k * 10)]
-            results = self.reranker.rerank(query_text, pre_candidates, top_k=top_k)
-            return results
+            return self.reranker.rerank(query_text, pre_candidates, top_k=top_k)
 
-        # ── 4. 无精排时：Threshold 过滤 + top_k 截断 ──
+        # ── 4b. 阈值过滤 ──
         results = [r for r in results if r["score"] >= threshold]
-        results = sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
-
-        return results
+        return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]

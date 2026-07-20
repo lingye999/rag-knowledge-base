@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.embedding import EmbeddingService
 from src.vector_store.faiss_store import FaissVectorStore
-from src.vector_store.hybrid import HybridRetriever
 from src.retriever import Retriever
 from src.ingestion import IngestionService
 from src.reranker import Reranker
@@ -33,7 +32,6 @@ except Exception as e:
 print("\n=== 初始化 ===")
 emb = EmbeddingService()
 db = FaissVectorStore(emb.dimension)
-hybrid = HybridRetriever(db)
 
 # Day 3: 重排序器
 try:
@@ -44,7 +42,7 @@ except Exception as e:
     print(f"[SKIP] 重排序器加载失败: {e}")
 
 retriever = Retriever(db, reranker=reranker)
-ingestion = IngestionService(emb, db, hybrid)
+ingestion = IngestionService(emb, db, retriever)
 print(f"维度: {emb.dimension}, 索引类型: flat, 当前数据: {db.count}")
 
 # ── 测试 1: 添加文件（使用 IngestionService） ──
@@ -86,19 +84,17 @@ if os.path.exists(test_file):
     for r in results:
         print(f"  [{r['score']:.4f}] [{r['doc']}] {r['text'][:50]}...")
 
-# ── 测试 4: /hybrid_search ──
-print("\n=== 测试 4: /hybrid_search ===")
-if hybrid.bm25 is not None:
+# ── 测试 4: /search 自动混合检索（retriever 内部集成 BM25） ──
+print("\n=== 测试 4: /search 自动混合检索（含 BM25）===")
+if retriever._bm25 is not None:
     for q in ["编程", "数据"]:
         t0 = time.time()
         vec = emb.encode(q)
-        tokens = jieba.lcut(q)
-        results = hybrid.search(vec, tokens, top_k=3)
+        results = retriever.search(q, vec, top_k=3)
         t1 = time.time()
         print(f"\n[混合] \"{q}\" ({len(results)}条, {(t1-t0)*1000:.0f}ms):")
         for i, r in enumerate(results):
-            doc = db.meta[r["index"]].get("doc", "未知") if db.meta else "?"
-            print(f"  {i+1}. [hybrid {r['score']:.4f}] [{doc}] {r['text'][:50]}...")
+            print(f"  {i+1}. [{r['score']:.4f}] [{r['doc']}] {r['text'][:50]}...")
 else:
     print("[SKIP] BM25 未初始化")
 

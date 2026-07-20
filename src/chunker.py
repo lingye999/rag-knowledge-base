@@ -1,21 +1,38 @@
-"""文本分块策略：sentence / paragraph / jieba / size / auto"""
+"""文本分块策略：sentence / paragraph / jieba / size / auto，均支持重叠"""
 import re
 import jieba
 
 
-def chunk_by_sentence(text: str) -> list[str]:
-    """按照【。！？.!?】分割句子"""
+def chunk_by_sentence(text: str, max_sentences: int = 8,
+                      overlap: int = 2) -> list[str]:
+    """按句子分块，支持重叠
+
+    overlap=1 时相邻 chunk 共享 1 个句子，减少切在语义中间的信息丢失。
+    """
     sentences = re.split(r"[。！？.!?]", text)
-    return [s.strip() for s in sentences if s.strip()]
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return []
+
+    chunks = []
+    step = max(1, max_sentences - overlap)
+    for i in range(0, len(sentences), step):
+        end = min(i + max_sentences, len(sentences))
+        chunk = "".join(sentences[i:end])
+        chunks.append(chunk)
+        if end >= len(sentences):
+            break
+    return chunks
 
 
 def chunk_by_paragraph(text: str) -> list[str]:
-    """按照段落分割"""
-    paragraph = text.split("\n")
-    return [s.strip() for s in paragraph if s.strip()]
+    """按段落分割（段落本身已是不连续的单位，不做重叠）"""
+    paragraphs = text.split("\n")
+    return [s.strip() for s in paragraphs if s.strip()]
 
 
-def chunk_by_size(text: str, chunk_size: int = 200, overlap: int = 50) -> list[str]:
+def chunk_by_size(text: str, chunk_size: int = 400,
+                  overlap: int = 80) -> list[str]:
     """固定窗口大小分割，带重叠"""
     chunks = []
     start = 0
@@ -27,13 +44,21 @@ def chunk_by_size(text: str, chunk_size: int = 200, overlap: int = 50) -> list[s
     return chunks
 
 
-def chunk_by_jieba(text: str, max_words: int = 50) -> list[str]:
-    """按中文分词结果分块"""
+def chunk_by_jieba(text: str, max_words: int = 120,
+                   overlap: int = 20) -> list[str]:
+    """按中文分词分块，支持重叠"""
     words = jieba.lcut(text)
+    if not words:
+        return []
+
     chunks = []
-    for i in range(0, len(words), max_words):
-        chunk = "".join(words[i:i + max_words])
+    step = max(1, max_words - overlap)
+    for i in range(0, len(words), step):
+        end = min(i + max_words, len(words))
+        chunk = "".join(words[i:end])
         chunks.append(chunk)
+        if end >= len(words):
+            break
     return chunks
 
 
@@ -78,4 +103,7 @@ def chunk_text(text: str, method: str = "auto") -> list[str]:
     elif method == "size":
         return chunk_by_size(text)
     else:
-        raise ValueError(f"不支持的分块方法: {method}，可选: sentence / paragraph / jieba / size / auto")
+        raise ValueError(
+            f"不支持的分块方法: {method}，可选: "
+            f"sentence / paragraph / jieba / size / auto"
+        )
