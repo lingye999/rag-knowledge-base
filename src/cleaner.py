@@ -1,5 +1,19 @@
-"""文本清洗：表格噪声过滤 + 乱码页检测 + 停用词"""
+"""文本清洗：表格噪声过滤 + 乱码页检测 + 停用词 + OCR 空白清理"""
+
 import re
+
+
+def clean_ocr_text(text: str) -> str:
+    """清洗 OCR/Marker 输出中的残留空白和 HTML 标签"""
+    # 去掉 HTML 标签
+    text = re.sub(r'<[^>]+>', '', text)
+    # 多个空格合并为一个
+    text = re.sub(r' {3,}', ' ', text)
+    # 多个换行合并为一个
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # 行首行尾去空白
+    text = '\n'.join(line.strip() for line in text.split('\n'))
+    return text.strip()
 
 
 def clean_table_noise(text: str) -> str:

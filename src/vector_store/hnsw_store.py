@@ -31,8 +31,11 @@ class HnswVectorStore(BaseVectorStore):
 
         # 如果传入了文档的这个名字，维护doc和meta
         if doc_name is not None:
-            indices = list(range(start, start + len(texts)))  # 新 chunk 在 FAISS/texts 中的位置范围
-            self.doc_registry[doc_name] = indices  # 文档名 → 位置范围映射
+            indices = list(range(start, start + len(texts)))
+            if doc_name in self.doc_registry:
+                self.doc_registry[doc_name].extend(indices)
+            else:
+                self.doc_registry[doc_name] = indices
             for _ in texts:
                 self.meta.append({"doc": doc_name})
 

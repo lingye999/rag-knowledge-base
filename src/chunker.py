@@ -52,14 +52,22 @@ def chunk_text(text: str, method: str = "auto") -> list[str]:
         else:
             chinese_ratio = 0
 
-        if chinese_ratio > 0.3:
+        # 扫描件/OCR 检测：句号密度低 + 回车多 → 用 paragraph 分块
+        sentence_ends = len(re.findall(r'[。！？.!?]', text))
+        line_count = max(1, len(paragraphs))
+        sentence_density = sentence_ends / line_count if line_count > 0 else 0
+
+        if sentence_density < 0.5 and len(paragraphs) >= 3:
+            method = "paragraph"
+        elif chinese_ratio > 0.3:
             method = "jieba"
         elif len(paragraphs) >= 3:
             method = "paragraph"
         else:
             method = "sentence"
 
-        print(f"[Auto] 中文占比 {chinese_ratio:.0%}，段落 {len(paragraphs)} 个，使用 {method} 分块")
+        print(f"[Auto] 中文占比 {chinese_ratio:.0%}，段落 {len(paragraphs)} 个，"
+              f"句密度 {sentence_density:.1f}，使用 {method} 分块")
 
     if method == "sentence":
         return chunk_by_sentence(text)

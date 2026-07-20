@@ -12,6 +12,7 @@ from src.vector_store.faiss_store import FaissVectorStore
 from src.vector_store.hybrid import HybridRetriever
 from src.retriever import Retriever
 from src.ingestion import IngestionService
+from src.reranker import Reranker
 import jieba
 import time
 
@@ -33,7 +34,16 @@ print("\n=== 初始化 ===")
 emb = EmbeddingService()
 db = FaissVectorStore(emb.dimension)
 hybrid = HybridRetriever(db)
-retriever = Retriever(db)
+
+# Day 3: 重排序器
+try:
+    reranker = Reranker("BAAI/bge-reranker-base")
+    print("[OK] 重排序器已就绪")
+except Exception as e:
+    reranker = None
+    print(f"[SKIP] 重排序器加载失败: {e}")
+
+retriever = Retriever(db, reranker=reranker)
 ingestion = IngestionService(emb, db, hybrid)
 print(f"维度: {emb.dimension}, 索引类型: flat, 当前数据: {db.count}")
 
@@ -58,7 +68,7 @@ print("\n=== 测试 2: /search（retriever 三维度加权）===")
 for q in ["Python", "文件", "算法"]:
     t0 = time.time()
     vec = emb.encode(q)
-    results = retriever.search(vec, top_k=3)
+    results = retriever.search(q, vec, top_k=3)
     t1 = time.time()
     print(f"\n[搜索] \"{q}\" ({len(results)}条, {(t1-t0)*1000:.0f}ms):")
     for i, r in enumerate(results):
@@ -71,7 +81,7 @@ print("\n=== 测试 3: /search 限定文档 ===")
 if os.path.exists(test_file):
     doc_name = os.path.basename(test_file)
     vec = emb.encode("Python")
-    results = retriever.search(vec, top_k=3, doc_filter=doc_name)
+    results = retriever.search("Python", vec, top_k=3, doc_filter=doc_name)
     print(f"[限定 {doc_name}] {len(results)} 条")
     for r in results:
         print(f"  [{r['score']:.4f}] [{r['doc']}] {r['text'][:50]}...")
@@ -127,7 +137,7 @@ if os.path.exists(test_file2):
 print("\n=== 测试 8: /ask ===")
 if llm is not None:
     vec = emb.encode("Python")
-    results = retriever.search(vec, top_k=5)
+    results = retriever.search("Python", vec, top_k=5)
     if results:
         chunks = [r["text"] for r in results]
         print(f"检索到 {len(chunks)} 条，LLM 生成中...")

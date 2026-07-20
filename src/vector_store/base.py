@@ -41,10 +41,19 @@ class BaseVectorStore(ABC):
         if not self.deleted:
             return
 
-        #提取出可用的位置信息并重建index
-        alive=[i for i in range(len(self.texts)) if i not in self.deleted]
-        all_vectors=self.index.reconstruct_n(0, self.index.ntotal)
-        all_vectors=all_vectors[alive]
+        # 提取出可用的位置信息并重建index
+        alive = [i for i in range(len(self.texts)) if i not in self.deleted]
+
+        # reconstruct_n 仅 IndexFlat 支持，IVF/HNSW 需逐条重建
+        try:
+            all_vectors = self.index.reconstruct_n(0, self.index.ntotal)
+        except RuntimeError:
+            n = self.index.ntotal
+            all_vectors = np.zeros((n, self.dimension), dtype=np.float32)
+            for i in range(n):
+                all_vectors[i] = self.index.reconstruct(i)
+
+        all_vectors = all_vectors[alive]
         vecs = self._to_normalized(all_vectors)
 
         # 根据索引类型建新索引（保留 compact 前的索引类型）

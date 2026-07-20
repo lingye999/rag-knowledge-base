@@ -3,6 +3,7 @@ import os
 import docx
 from .plumber import read_pdf_plumber
 from .ocr import read_pdf_ocr
+from .marker_reader import read_pdf_marker
 
 
 def read_file(path: str, force_ocr: bool = False) -> str:
@@ -53,7 +54,17 @@ def _read_docx(path: str) -> str:
 
 
 def _read_pdf(path: str, force_ocr: bool = False) -> str:
-    """读取 PDF 文本：默认 pdfplumber 优先，force_ocr 时 OCR 优先"""
+    """读取 PDF 文本：Marker → pdfplumber → OCR 三级降级"""
+    # ── 第 0 级：Marker（Day 4 新增，主力解析器） ──
+    if not force_ocr:
+        try:
+            result = read_pdf_marker(path)
+            if result and result.strip():
+                return result
+        except Exception:
+            pass  # 降级
+
+    # ── 第 1 级：OCR 优先模式 ──
     if force_ocr:
         result = read_pdf_ocr(path)
         if result and result.strip():
@@ -63,12 +74,14 @@ def _read_pdf(path: str, force_ocr: bool = False) -> str:
             return result
         raise RuntimeError(f"无法提取 PDF 文字（已尝试 OCR + 文本提取）: {path}")
 
+    # ── 第 2 级：pdfplumber 降级 ──
     result = read_pdf_plumber(path)
     if result and result.strip():
         return result
 
+    # ── 第 3 级：OCR 兜底 ──
     result = read_pdf_ocr(path)
     if result and result.strip():
         return result
 
-    raise RuntimeError(f"无法提取 PDF 文字（已尝试文本提取 + OCR）: {path}")
+    raise RuntimeError(f"无法提取 PDF 文字（已尝试 Marker → pdfplumber → OCR）: {path}")
