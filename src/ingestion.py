@@ -1,24 +1,25 @@
-"""文档入库：读取 → 清洗 → 分块 → 向量化 → 入库"""
+"""文档入库：读取 → 清洗 → 分块 → 质量评分 → 向量化 → 入库 + BM25 索引"""
 
 import os
 from .document import read_file
 from .chunker import chunk_text
 from .cleaner import clean_ocr_text
+from .quality_scorer import compute_quality_scores
 
 
 class IngestionService:
     """统一入库服务
 
     用法:
-        svc = IngestionService(emb, db, hybrid)
-        svc.add("data/说明书.pdf")                     # 默认模式
-        svc.add("data/扫描件.pdf", force_ocr=True)     # OCR 模式
+        svc = IngestionService(emb, db, retriever)
+        svc.add("data/说明书.pdf")
+        svc.add("data/扫描件.pdf", force_ocr=True)
     """
 
-    def __init__(self, emb, db, hybrid):
+    def __init__(self, emb, db, retriever):
         self.emb = emb
         self.db = db
-        self.hybrid = hybrid
+        self.retriever = retriever
 
     def add(self, file_path: str, chunk_method: str = "auto",
             force_ocr: bool = False):
@@ -30,7 +31,7 @@ class IngestionService:
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
         text = read_file(file_path, force_ocr=force_ocr)
-        text = clean_ocr_text(text)  # 清洗 OCR 残留空白和 HTML 标签
+        text = clean_ocr_text(text)
         chunks = chunk_text(text, chunk_method)
         if not chunks:
             print(f"[警告] 文件 {file_path} 未提取到有效文本块，已跳过")
@@ -42,8 +43,9 @@ class IngestionService:
             return 0, ""
 
         doc_name = os.path.basename(file_path)
-        self.db.add_batch(chunks, vectors, doc_name=doc_name)
-        self.hybrid.add_texts(chunks)
+        qualities = compute_quality_scores(chunks)  # ← 算质量分
+        self.db.add_batch(chunks, vectors, doc_name=doc_name, qualities=qualities)
+        self.retriever.add_texts(chunks)  # ← 同时构建 BM25 索引
 
         mode = "OCR模式" if force_ocr else "默认"
         print(f"文件 {file_path} 加载完成({mode}): {len(chunks)} 个文本块")
