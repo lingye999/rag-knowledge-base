@@ -107,9 +107,13 @@ def run_audit(sample_size: int = 30, use_free_api: bool = False):
     # ── 初始化 LLM ──
     if use_free_api:
         from openai import OpenAI
+        free_key = os.environ.get("FREE_API_KEY", "")
+        if not free_key:
+            print("❌ 使用 --free-api 需要设置 FREE_API_KEY 环境变量")
+            return
         llm = type('obj', (object,), {
             'client': OpenAI(
-                api_key="sk-0oIlUXCqnd4xuTlU20AmGLJfMyTDW97KQ9Ktaq5cnZ5hg6M7",
+                api_key=free_key,
                 base_url="https://api.llsdog.cn/v1"
             ),
             'model': 'mimo-v2.5-free'
@@ -117,7 +121,7 @@ def run_audit(sample_size: int = 30, use_free_api: bool = False):
     else:
         try:
             from src.llm_service import LLMService
-            api_key = os.environ.get("DEEPSEEK_API_KEY", "") or "sk-c2419e869b7f4123a1fd0c69fcabc9c0"
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
             llm = LLMService(api_key=api_key)
         except ValueError:
             print("❌ 需要设置 DEEPSEEK_API_KEY")
