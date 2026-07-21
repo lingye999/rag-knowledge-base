@@ -22,15 +22,16 @@ class IngestionService:
         self.retriever = retriever
 
     def add(self, file_path: str, chunk_method: str = "auto",
-            force_ocr: bool = False):
+            force_ocr: bool = False, use_marker: bool = False):
         """添加入库一个文档
 
-        返回: (chunk_count, doc_name)
+        Args:
+            use_marker: 复杂 PDF 使用 Marker 解析（需 GPU + 本地模型）
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
-        text = read_file(file_path, force_ocr=force_ocr)
+        text = read_file(file_path, force_ocr=force_ocr, use_marker=use_marker)
         text = clean_ocr_text(text)
         chunks = chunk_text(text, chunk_method)
         if not chunks:
@@ -47,6 +48,6 @@ class IngestionService:
         self.db.add_batch(chunks, vectors, doc_name=doc_name, qualities=qualities)
         self.retriever.add_texts(chunks)  # ← 同时构建 BM25 索引
 
-        mode = "OCR模式" if force_ocr else "默认"
+        mode = "Marker" if use_marker else ("OCR模式" if force_ocr else "默认(混合)")
         print(f"文件 {file_path} 加载完成({mode}): {len(chunks)} 个文本块")
         return len(chunks), doc_name
