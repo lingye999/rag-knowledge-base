@@ -1,0 +1,65 @@
+# ── RAG 知识库系统配置 ──
+# 修改参数后无需改代码，重启即可生效
+# 环境变量可覆写，如: export CHUNKING_SENTENCE_OVERLAP=2
+
+# Embedding 模型
+embedding:
+  model: "BAAI/bge-small-zh-v1.5"
+  device: "cpu"  # cpu / cuda
+  batch_size: 32
+
+# 分块策略
+chunking:
+  default_method: "auto"
+  sentence:
+    max_sentences: 8
+    overlap: 1
+  jieba:
+    max_words: 120
+    overlap: 20
+  size:
+    chunk_size: 400
+    overlap: 80
+
+# 检索参数
+retrieval:
+  top_k: 5
+  rrf_k: 60
+  chunk_decay: 0.2         # Route B 几何衰减系数
+  alpha: 0.7                # chunk 相关性权重
+  beta: 0.1                 # 文档排名权重
+  gamma: 0.2                # 质量分权重
+  threshold: 0.3            # 分数下限
+  recall_expand: 10         # 有 reranker 时召回倍数
+
+# 向量索引
+index:
+  type: "flat"              # flat / ivf / hnsw
+  ivf:
+    nlist: 100
+    nprobe: 10
+  hnsw:
+    M: 32
+    ef_construction: 128
+    ef_search: 64
+
+# LLM 服务
+llm:
+  model: "deepseek-v4-pro"
+  base_url: "https://api.deepseek.com"
+  temperature: 0.3
+  max_tokens: 1024
+
+# 重排序器
+reranker:
+  model: "BAAI/bge-reranker-base"
+
+# 数据持久化
+data:
+  save_path: "data/sessions/default"
+
+# 日志
+logging:
+  level: "INFO"             # DEBUG / INFO / WARN / ERROR
+  file: "logs/rag.log"      # 日志文件路径，空字符串则只输出到控制台
+  format: "structured"      # structured (JSON) / simple

@@ -2,22 +2,27 @@
 
 用法:
     retriever = Retriever(db, reranker=reranker)
-    retriever.add_texts(chunks)          # 构建 BM25 索引
+    retriever.add_texts(chunks)
     results = retriever.search(query_text, query_vec, top_k=5)
 """
 import jieba
 import numpy as np
 from rank_bm25 import BM25Okapi
+from config import config as _cfg
 from .reranker import Reranker
+
+_cfg_r = _cfg["retrieval"]
 
 
 class Retriever:
     """统一检索引擎（Dense + BM25 双路召回 → RRF → 文档聚合 → 3D → 精排）"""
 
-    # 三维度权重
-    ALPHA = 0.7   # 相关性（chunk 分数）
-    BETA = 0.1    # 元数据（文档排名）
-    GAMMA = 0.2   # 文档属性（质量分，可动态）
+    # 从配置中心读取，可运行时修改
+    ALPHA = _cfg_r["alpha"]
+    BETA = _cfg_r["beta"]
+    GAMMA = _cfg_r["gamma"]
+    RRF_K = _cfg_r["rrf_k"]
+    CHUNK_DECAY = _cfg_r["chunk_decay"]
 
     RRF_K = 60
     CHUNK_DECAY = 0.2
@@ -46,9 +51,9 @@ class Retriever:
 
     def search(self, query_text: str,
                query_vec: list[float],
-               top_k: int = 5,
+               top_k: int = None,
                doc_filter: str | None = None,
-               threshold: float = 0.3) -> list[dict]:
+               threshold: float = None) -> list[dict]:
         """完整检索流程
 
         步骤:
@@ -57,7 +62,11 @@ class Retriever:
             3. 三维度加权评分
             4. Cross-Encoder 精排（可选）或阈值过滤
         """
-        expand = 5 if self.reranker else 1
+        if top_k is None:
+            top_k = _cfg_r["top_k"]
+        if threshold is None:
+            threshold = _cfg_r["threshold"]
+        expand = _cfg_r["recall_expand"] if self.reranker else 1
         route_k = top_k * 5 * expand
         scores: dict[int, float] = {}
 
