@@ -45,8 +45,7 @@ def run():
     cfg_llm = config["llm"]
     try:
         llm = LLMService(
-            api_key=os.environ.get("DEEPSEEK_API_KEY", "")
-                    or "sk-c2419e869b7f4123a1fd0c69fcabc9c0",
+            api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
             model=cfg_llm["model"],
             base_url=cfg_llm["base_url"],
         )
