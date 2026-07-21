@@ -145,7 +145,7 @@ else:
     print("[SKIP] LLM 未配置")
 
 # ── 清理测试文件 ──
-for f in ["test_session.faiss", "test_session_texts.json"]:
+for f in ["test_session.faiss", "test_session.db"]:
     if os.path.exists(f):
         os.remove(f)
 

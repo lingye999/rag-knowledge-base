@@ -1,0 +1,17 @@
+# ── 核心依赖 ──
+faiss-cpu>=1.14
+jieba>=0.42
+rank-bm25>=0.2
+sentence-transformers>=5.0
+numpy>=2.0
+
+# ── PDF / 文档解析 ──
+pdfplumber>=0.11
+easyocr>=1.7
+paddleocr>=3.7
+
+# ── 深度学习后端 ──
+torch>=2.0
+
+# ── 可选 ──
+# marker-pdf>=1.0          # 高质量 PDF 解析，CPU 上慢

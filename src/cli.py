@@ -102,6 +102,7 @@ def run():
             print("  /switch <type>          - 切换索引: flat / ivf / hnsw")
             print("  /delete <doc_name>      - 标记删除文档（/save 后永久生效）")
             print("  /list                  - 查看已有文档列表")
+            print("  /clear                 - 清空所有数据（需确认）")
             print("  /save <path>            - 保存")
             print("  /load <path>            - 加载")
             print("  /exit                   - 退出")
@@ -247,6 +248,29 @@ def run():
                 ingestion.db = db
 
                 current_type = idx_type
+
+        elif cmd == "/clear":
+            print("确认清空所有数据？(yes/no): ", end="", flush=True)
+            confirm = input().strip()
+            if confirm == "yes":
+                # 清空内存数据
+                db.texts.clear()
+                db.meta.clear()
+                db.doc_registry.clear()
+                db.deleted.clear()
+                # 重建空 FAISS 索引
+                import numpy as np
+                db.index = db._build_index()
+                # 清空 BM25
+                retriever._tokenized.clear()
+                retriever._bm25 = None
+                # 清空 SQLite
+                if db._conn is not None:
+                    db._conn.execute("DELETE FROM chunks")
+                    db._conn.commit()
+                log.info("所有数据已清空")
+            else:
+                print("已取消")
 
         elif cmd.startswith("/delete "):
             doc_name = cmd[len("/delete "):].strip()
