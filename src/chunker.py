@@ -4,10 +4,11 @@ import jieba
 
 
 def chunk_by_sentence(text: str, max_sentences: int = 8,
-                      overlap: int = 2) -> list[str]:
+                      overlap: int = 1) -> list[str]:
     """按句子分块，支持重叠
 
-    overlap=1 时相邻 chunk 共享 1 个句子，减少切在语义中间的信息丢失。
+    默认 overlap=1，相邻 chunk 共享 1 句（约 12.5%），
+    在保持语义连贯和控制冗余之间取得平衡。
     """
     sentences = re.split(r"[。！？.!?]", text)
     sentences = [s.strip() for s in sentences if s.strip()]
