@@ -4,7 +4,7 @@ import json
 
 # 默认配置（DeepSeek 官方 API）
 DEFAULT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_MODEL = "deepseek-v4-pro"
 ENV_KEY = "DEEPSEEK_API_KEY"
 
 class LLMService:

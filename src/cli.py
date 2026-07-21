@@ -43,7 +43,7 @@ def run():
     try:
         llm = LLMService(
             api_key=os.environ.get("DEEPSEEK_API_KEY", "") or "sk-c2419e869b7f4123a1fd0c69fcabc9c0",
-            model="deepseek-v4-flash"
+            model="deepseek-v4-pro"
         )
         log.info("LLM 已就绪（DeepSeek V4 Flash）")
     except ValueError as e:
