@@ -234,9 +234,9 @@ data/*.json
 .huggingface/
 
 # 测试会话文件
-test_*
-test_*.faiss
-test_*.db
+/test_*
+/test_*.faiss
+/test_*.db
 data/*.docx
 data/*.pdf
 

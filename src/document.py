@@ -2,9 +2,10 @@
 import os
 import docx
 from .plumber import read_pdf_plumber
-from .ocr import read_pdf_ocr
+from .ocr import read_pdf_ocr, read_pdf_ocr_pages
 from .marker_reader import read_pdf_marker
-from .hybrid_reader import read_pdf_hybrid
+from .hybrid_reader import read_pdf_hybrid, read_pdf_hybrid_pages
+from .parse_result import ParseResult, TextBlock
 
 
 def read_file(path: str, force_ocr: bool = False, use_marker: bool = False) -> str:
@@ -13,25 +14,63 @@ def read_file(path: str, force_ocr: bool = False, use_marker: bool = False) -> s
     Args:
         use_marker: 复杂 PDF 手动启用 Marker（需要 GPU + 本地模型）
     """
+    return read_file_structured(
+        path,
+        force_ocr=force_ocr,
+        use_marker=use_marker,
+    ).text
+
+
+def read_file_structured(
+    path: str,
+    force_ocr: bool = False,
+    use_marker: bool = False,
+    page_numbers: set[int] | None = None,
+    allow_ocr: bool = True,
+) -> ParseResult:
+    """读取文件并返回结构化解析结果，兼容后续 page/bbox/confidence 扩展。"""
     if not os.path.exists(path):
         raise FileNotFoundError(f"文件不存在: {path}")
 
     if path.endswith(".txt"):
+        text = ""
         for encoding in ["utf-8", "gbk", "gb2312", "gb18030"]:
             try:
                 with open(path, "r", encoding=encoding) as f:
-                    return f.read()
+                    text = f.read()
+                    break
             except (UnicodeDecodeError, UnicodeError):
                 continue
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
+        if not text:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+        return _single_block_result(path, text, parser="txt", source="txt")
 
     elif path.endswith(".docx"):
-        return _read_docx(path)
+        text = _read_docx(path)
+        return _single_block_result(path, text, parser="docx", source="docx")
     elif path.endswith(".pdf"):
-        return _read_pdf(path, force_ocr=force_ocr, use_marker=use_marker)
+        return _read_pdf_structured(
+            path,
+            force_ocr=force_ocr,
+            use_marker=use_marker,
+            page_numbers=page_numbers,
+            allow_ocr=allow_ocr,
+        )
     else:
         raise ValueError(f"不支持的文件格式: {path}，仅支持 .txt / .docx / .pdf")
+
+
+def _single_block_result(
+    path: str,
+    text: str,
+    parser: str,
+    source: str,
+) -> ParseResult:
+    blocks = []
+    if text and text.strip():
+        blocks.append(TextBlock(text=text, source=source))
+    return ParseResult(path=path, blocks=blocks, parser=parser)
 
 
 def _read_docx(path: str) -> str:
@@ -56,6 +95,56 @@ def _read_docx(path: str) -> str:
     if not result.strip():
         print(f"[警告] DOCX 文件中未提取到文字: {path}")
     return result
+
+
+def _read_pdf_structured(
+    path: str,
+    force_ocr: bool = False,
+    use_marker: bool = False,
+    page_numbers: set[int] | None = None,
+    allow_ocr: bool = True,
+) -> ParseResult:
+    if use_marker:
+        text = _read_pdf(path, force_ocr=False, use_marker=True)
+        return _single_block_result(
+            path, text, parser="pdf_marker", source="pdf_marker"
+        )
+
+    if force_ocr:
+        pages = read_pdf_ocr_pages(path, page_numbers=page_numbers)
+        if pages and any(page.strip() for page in pages):
+            return _page_blocks_result(path, pages, parser="pdf_ocr")
+        text = read_pdf_plumber(path)
+        if text.strip():
+            return _single_block_result(
+                path, text, parser="pdf_plumber_fallback", source="pdf_plumber"
+            )
+        raise RuntimeError(f"Unable to extract PDF text: {path}")
+
+    try:
+        pages = read_pdf_hybrid_pages(
+            path, page_numbers=page_numbers, allow_ocr=allow_ocr
+        )
+        if pages and any(page.strip() for page in pages):
+            return _page_blocks_result(path, pages, parser="pdf_hybrid")
+    except Exception as exc:
+        print(f"[PDF] Hybrid parse failed, falling back to OCR: {exc}")
+
+    if not allow_ocr:
+        raise RuntimeError(f"Hybrid parse produced no text without OCR: {path}")
+    pages = read_pdf_ocr_pages(path, page_numbers=page_numbers)
+    if pages and any(page.strip() for page in pages):
+        return _page_blocks_result(path, pages, parser="pdf_ocr_fallback")
+    raise RuntimeError(f"Unable to extract PDF text: {path}")
+
+
+def _page_blocks_result(path: str, pages: list[str], parser: str) -> ParseResult:
+    blocks = [
+        TextBlock(text=text, source=parser, page=page_number)
+        for page_number, text in enumerate(pages, start=1)
+        if text.strip()
+    ]
+    return ParseResult(path=path, blocks=blocks, parser=parser)
 
 
 def _read_pdf(path: str, force_ocr: bool = False, use_marker: bool = False) -> str:

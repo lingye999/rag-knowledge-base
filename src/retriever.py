@@ -10,6 +10,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from config import config as _cfg
 from .reranker import Reranker
+from .chunk_repository import ChunkRepository
 
 _cfg_r = _cfg["retrieval"]
 
@@ -24,16 +25,21 @@ class Retriever:
     RRF_K = _cfg_r["rrf_k"]
     CHUNK_DECAY = _cfg_r["chunk_decay"]
 
-    RRF_K = 60
-    CHUNK_DECAY = 0.2
-
-    def __init__(self, db, reranker: Reranker | None = None):
+    def __init__(self, db, reranker: Reranker | None = None,
+                 repository: ChunkRepository | None = None):
         self.db = db
+        self.repository = repository or ChunkRepository(db)
         self.reranker = reranker
 
         # BM25 内部索引（通过 add_texts 填充）
         self._tokenized: list[list[str]] = []
         self._bm25: BM25Okapi | None = None
+
+    def bind_store(self, db, repository: ChunkRepository | None = None):
+        """Bind a replacement index without exposing migration details."""
+        self.db = db
+        self.repository = repository or ChunkRepository(db)
+        self._rebuild_bm25(self.repository.all_texts())
 
     # ── BM25 构建 ──
 
@@ -81,6 +87,8 @@ class Retriever:
             bm25_scores = self._bm25.get_scores(query_tokens)
             top_bm25 = np.argsort(bm25_scores)[::-1][:route_k]
             for rank, idx in enumerate(top_bm25):
+                if self.db.is_deleted(int(idx)):
+                    continue
                 scores[idx] = scores.get(idx, 0) + 1 / (self.RRF_K + rank)
 
         if not scores:
@@ -90,17 +98,20 @@ class Retriever:
         sorted_idxs = sorted(scores, key=scores.get, reverse=True)
         fused = []
         for i in sorted_idxs:
-            if i < len(self.db.texts):
-                fused.append({
-                    "text": self.db.texts[i],
-                    "score": scores[i],
-                    "index": i,
-                })
+            record = self.repository.get(i)
+            if record is None or record.deleted:
+                continue
+            fused.append({
+                "text": record.text,
+                "score": scores[i],
+                "index": i,
+            })
 
         # 文档过滤
         if doc_filter:
             fused = [r for r in fused
-                     if self.db.meta[r["index"]].get("doc") == doc_filter]
+                     if (self.repository.get(r["index"]) and
+                         self.repository.get(r["index"]).doc == doc_filter)]
 
         if not fused:
             return []
@@ -108,7 +119,8 @@ class Retriever:
         # ── 2. Route B：文档聚合 ──
         doc_chunks: dict[str, list[dict]] = {}
         for r in fused:
-            doc = self.db.meta[r["index"]].get("doc", "未知")
+            record = self.repository.get(r["index"])
+            doc = record.doc if record else "未知"
             doc_chunks.setdefault(doc, []).append(r)
 
         doc_scores = {}
@@ -119,19 +131,18 @@ class Retriever:
             doc_scores[doc] = doc_rrf
 
         # ── 3. 三维度加权 ──
-        MAX_DOC_RRF = 1.0
         results = []
         for r in fused:
-            doc = self.db.meta[r["index"]].get("doc", "未知")
+            record = self.repository.get(r["index"])
+            doc = record.doc if record else "未知"
 
-            alpha_score = min(max(r["score"], 0.0), 1.0)
-            beta_score = min(doc_scores.get(doc, 0) / MAX_DOC_RRF, 1.0)
-            gamma_score = self.db.meta[r["index"]].get("quality", 0.5)  # 后续可改为动态质量分
+            alpha_score = min(max(r["score"] * self.RRF_K, 0.0), 1.0)
+            beta_score = min(max(doc_scores.get(doc, 0) * self.RRF_K, 0.0), 1.0)
+            gamma_score = record.quality if record else 0.5
 
             final_score = (self.ALPHA * alpha_score +
                            self.BETA * beta_score +
                            self.GAMMA * gamma_score)
-            final_score = final_score * (1 - threshold) + threshold
 
             results.append({
                 "text": r["text"],

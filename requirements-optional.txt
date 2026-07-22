@@ -1,0 +1,7 @@
+# ── 可选重依赖 ──
+# 高质量 OCR / 版面解析依赖较重，按能力单独安装。
+
+paddleocr>=3.7
+
+# Marker PDF 解析，CPU 上较慢，建议在有 GPU 时启用。
+# marker-pdf>=1.0

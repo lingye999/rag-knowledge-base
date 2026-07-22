@@ -1,6 +1,7 @@
 from rank_bm25 import BM25Okapi
 import jieba
 import numpy as np
+from ..chunk_repository import ChunkRepository
 
 
 class HybridRetriever:
@@ -15,6 +16,7 @@ class HybridRetriever:
     def __init__(self, db):
         """接收外部 FaissVectorStore，不复建"""
         self.db = db
+        self.repository = ChunkRepository(db)
         self._tokenized: list[list[str]] = []  # 分词结果，和 db.texts 对齐
         self.bm25 = None
 
@@ -45,7 +47,14 @@ class HybridRetriever:
             scores[idx] = scores.get(idx, 0) + 1 / (k + rank)
 
         sorted_idxs = sorted(scores, key=scores.get, reverse=True)[:top_k]
-        return [
-            {"text": self.db.texts[i], "score": scores[i], "index": i}
-            for i in sorted_idxs
-        ]
+        results = []
+        for index in sorted_idxs:
+            record = self.repository.get(int(index))
+            if record is None or record.deleted:
+                continue
+            results.append({
+                "text": record.text,
+                "score": scores[index],
+                "index": int(index),
+            })
+        return results

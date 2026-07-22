@@ -12,6 +12,27 @@ import os
 import uuid
 from datetime import datetime
 
+_LOGGING_KWARGS = {"exc_info", "stack_info", "stacklevel", "extra"}
+_STANDARD_RECORD_ATTRS = set(logging.makeLogRecord({}).__dict__)
+
+
+class StructuredLoggerAdapter(logging.LoggerAdapter):
+    """Allow log.info("event", key=value) and map custom kwargs to extra."""
+
+    def process(self, msg, kwargs):
+        extra = dict(kwargs.pop("extra", {}) or {})
+        custom = {
+            key: kwargs.pop(key)
+            for key in list(kwargs.keys())
+            if key not in _LOGGING_KWARGS
+        }
+        for key, value in custom.items():
+            if key in _STANDARD_RECORD_ATTRS:
+                key = f"field_{key}"
+            extra[key] = value
+        kwargs["extra"] = extra
+        return msg, kwargs
+
 
 class StructuredFormatter(logging.Formatter):
     """JSON 格式输出"""
@@ -30,6 +51,9 @@ class StructuredFormatter(logging.Formatter):
             if val is not None:
                 entry[key] = val
         # 异常信息
+        for key, val in record.__dict__.items():
+            if key not in _STANDARD_RECORD_ATTRS and key not in entry:
+                entry[key] = val
         if record.exc_info and record.exc_info[1]:
             entry["error"] = str(record.exc_info[1])
         return json.dumps(entry, ensure_ascii=False)
@@ -77,4 +101,4 @@ def setup_logging(level: str = "INFO",
 def get_logger(name: str) -> logging.LoggerAdapter:
     """获取带结构化能力的 logger"""
     logger = logging.getLogger(f"rag.{name}")
-    return logger
+    return StructuredLoggerAdapter(logger, {})

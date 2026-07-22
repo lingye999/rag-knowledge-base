@@ -1,0 +1,12 @@
+{"id":"extract_evac_001","doc":"E-VAC固封系列中压真空断路器-中文-2024-07-09.pdf","parser_mode":"pdf_hybrid","page":null,"must_contain":["12kV","额定电压"],"must_not_contain":["□","�"],"type":"native_pdf"}
+{"id":"extract_evac_002","doc":"E-VAC固封系列中压真空断路器-中文-2024-07-09.pdf","parser_mode":"pdf_hybrid","page":5,"must_contain":["真空灭弧室","固封"],"must_not_contain":["□","�"],"type":"native_pdf"}
+{"id":"extract_evac_003","doc":"E-VAC固封系列中压真空断路器-中文-2024-07-09.pdf","parser_mode":"pdf_hybrid","page":13,"must_contain":["手车式","固定式"],"must_not_contain":["□","�"],"allow_form_boxes":true,"type":"native_pdf"}
+{"id":"extract_evac_004","doc":"E-VAC固封系列中压真空断路器-中文-2024-07-09.pdf","parser_mode":"pdf_hybrid","page":5,"must_contain":["海拔","1000m"],"must_not_contain":["□","�"],"type":"native_pdf"}
+{"id":"extract_med_001","doc":"销售易医疗器械行业介绍与案例分享v0.5_杨成林.pdf","parser_mode":"pdf_hybrid","page":null,"must_contain":["医疗器械","市场规模"],"must_not_contain":["□","�"],"type":"slide_pdf"}
+{"id":"extract_med_002","doc":"销售易医疗器械行业介绍与案例分享v0.5_杨成林.pdf","parser_mode":"pdf_hybrid","page":2,"must_contain":["上游","材料"],"must_not_contain":["□","�"],"type":"slide_pdf"}
+{"id":"extract_med_003","doc":"销售易医疗器械行业介绍与案例分享v0.5_杨成林.pdf","parser_mode":"pdf_hybrid","page":3,"must_contain":["知识密集","资金密集"],"must_not_contain":["□","�"],"type":"slide_pdf"}
+{"id":"extract_gbz185_001","doc":"GBZ+185.4-2026.pdf","parser_mode":"pdf_hybrid","page":null,"must_contain":["智能体","互联"],"must_not_contain":["□","�"],"type":"standard_pdf"}
+{"id":"extract_gbz185_002","doc":"GBZ+185.4-2026.pdf","parser_mode":"pdf_hybrid","page":1,"must_contain":["国家市场监督管理总局","标准化管理委员会"],"must_not_contain":["□","�"],"type":"standard_pdf"}
+{"id":"extract_gbz40524_001","doc":"GBZ+40524-2021.pdf","parser_mode":"pdf_hybrid","page":null,"must_contain":["空间化","集成模型"],"must_not_contain":["□","�"],"type":"garbled_sensitive"}
+{"id":"extract_gbz40524_002","doc":"GBZ+40524-2021.pdf","parser_mode":"pdf_hybrid","page":null,"must_contain":["GB/T","2260"],"must_not_contain":["□","�"],"type":"garbled_sensitive"}
+{"id":"extract_gb34169_001","doc":"GB+34169-2017(EN).pdf","parser_mode":"ocr","page":null,"must_contain":["test","method"],"must_not_contain":["□","�"],"type":"ocr_english"}
