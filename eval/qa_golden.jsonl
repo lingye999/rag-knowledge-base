@@ -1,0 +1,10 @@
+{"id":"qa_evac_001","query":"E-VAC 断路器的额定电压是多少？","expected_answer":"E-VAC 断路器的额定电压为 12kV。","required_facts":["12kV"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_evac_002","query":"E-VAC 断路器支持哪些安装方式？","expected_answer":"E-VAC 断路器支持手车式和固定式安装方式。","required_facts":["手车式","固定式"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_evac_003","query":"什么是固封极柱技术？","expected_answer":"固封极柱技术通常是将真空灭弧室等核心导电部件用环氧树脂等绝缘材料固封成整体，以提升绝缘和环境适应能力。","required_facts":["固封极柱","APG","绝缘"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_med_001","query":"医疗器械行业的主要特点是什么？","expected_answer":"医疗器械行业具有知识密集、资金密集和多学科交叉等特点。","required_facts":["知识密集","资金密集","多学科交叉"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_med_002","query":"医疗器械行业的产业链上游包括哪些？","expected_answer":"医疗器械产业链上游包括电子制造、生物化学、材料等相关基础领域。","required_facts":["上游","电子制造","材料"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_gbz185_001","query":"GBZ 185.4 标准是由哪个机构发布的？","expected_answer":"GBZ 185.4 标准由国家市场监督管理总局和国家标准化管理委员会发布。","required_facts":["国家市场监督管理总局","标准化管理委员会"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_gbz40524_001","query":"GBZ 40524 标准引用了哪些参考文件？","expected_answer":"GBZ 40524 标准引用的参考文件包括 GB/T 2260、GB/T 7408 等。","required_facts":["GB/T","2260","7408"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_gb34169_001","query":"scope of GB 34169","expected_answer":"The scope of GB 34169 describes what the standard specifies and applies to.","required_facts":["scope","applies","specifies"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_negative_001","query":"E-VAC 断路器是否支持蓝牙远程控制？","expected_answer":"提供的文档中没有找到 E-VAC 断路器支持蓝牙远程控制的依据。","required_facts":["没有找到","依据"],"forbidden_claims":["支持蓝牙远程控制"],"citation_required":false}
+{"id":"qa_negative_002","query":"GBZ 185.4 是否规定了医疗器械市场规模？","expected_answer":"提供的 GBZ 185.4 文档中没有找到医疗器械市场规模相关规定。","required_facts":["没有找到","医疗器械市场规模"],"forbidden_claims":["规定了医疗器械市场规模"],"citation_required":false}

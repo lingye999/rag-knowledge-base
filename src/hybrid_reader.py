@@ -13,6 +13,16 @@ import pdfplumber
 import fitz
 import numpy as np
 
+_EASYOCR_READER = None
+
+
+def _get_easyocr_reader():
+    global _EASYOCR_READER
+    if _EASYOCR_READER is None:
+        import easyocr
+        _EASYOCR_READER = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+    return _EASYOCR_READER
+
 
 # ── 常用汉字集（用于检测 CID 映射错位）──
 # GB2312 一级汉字（最常用的 3755 个汉字的大致范围）
@@ -203,7 +213,9 @@ def _line_to_block(line_words: list[dict]) -> dict:
 
 # ── 主入口 ──
 
-def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
+def read_pdf_hybrid_pages(path: str, dpi: int = 200,
+                          page_numbers: set[int] | None = None,
+                          allow_ocr: bool = True) -> list[str]:
     """轻量混合读取 PDF
 
     流程（逐页）：
@@ -221,14 +233,16 @@ def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
         path: PDF 文件路径
         dpi: 渲染分辨率，越高 OCR 越准但越慢
     """
-    import easyocr
-    reader = easyocr.Reader(['ch_sim', 'en'], gpu=False)
+    reader = None
 
     doc_fitz = fitz.open(path)
-    all_pages = []
 
     with pdfplumber.open(path) as pdf:
-        for page_idx in range(min(len(doc_fitz), len(pdf.pages))):
+        total_pages = min(len(doc_fitz), len(pdf.pages))
+        all_pages = [""] * total_pages
+        for page_idx in range(total_pages):
+            if page_numbers is not None and page_idx + 1 not in page_numbers:
+                continue
             page_plumber = pdf.pages[page_idx]
             page_fitz = doc_fitz[page_idx]
 
@@ -244,9 +258,13 @@ def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
 
             # 情况 A：整页无文字 → 全页 OCR
             if not words:
+                if not allow_ocr:
+                    continue
+                if reader is None:
+                    reader = _get_easyocr_reader()
                 ocr_result = reader.readtext(img)
                 line_texts = [t for _, t, c in ocr_result if c > 0.3]
-                all_pages.append("".join(line_texts))
+                all_pages[page_idx] = "".join(line_texts)
                 continue
 
             # 情况 B：有文字 → 逐行判断
@@ -265,6 +283,9 @@ def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
                 need_ocr = _is_garbled(text)
 
                 if need_ocr:
+                    if not allow_ocr:
+                        page_lines.append(text)
+                        continue
                     # 坐标转换：points → pixels
                     x0 = int(max(0, bbox[0] * scale - 3))
                     y0 = int(max(0, bbox[1] * scale - 3))
@@ -272,6 +293,8 @@ def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
                     y1 = int(min(pix.height, bbox[3] * scale + 3))
 
                     if x1 > x0 and y1 > y0:
+                        if reader is None:
+                            reader = _get_easyocr_reader()
                         line_img = img[y0:y1, x0:x1]
                         ocr_result = reader.readtext(line_img)
                         ocr_text = "".join(
@@ -283,7 +306,7 @@ def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
                 else:
                     page_lines.append(text)
 
-            all_pages.append("".join(page_lines))
+            all_pages[page_idx] = "".join(page_lines)
 
             # 进度提示（长文档）
             if (page_idx + 1) % 10 == 0:
@@ -292,4 +315,9 @@ def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
     doc_fitz.close()
     total_chars = sum(len(p) for p in all_pages)
     print(f"[Hybrid] {path} 解析完成 ({len(pdf.pages)} 页, {total_chars} 字符)")
-    return "\n".join(all_pages)
+    return all_pages
+
+
+def read_pdf_hybrid(path: str, dpi: int = 200) -> str:
+    """Keep the legacy text-only hybrid-reader interface."""
+    return "\n".join(read_pdf_hybrid_pages(path, dpi=dpi))

@@ -65,17 +65,17 @@ class BaseVectorStore(ABC):
         self.index.add(vecs)
         self.texts.extend(texts)
 
+        indices = list(range(start, start + len(texts)))
         if doc_name is not None:
-            indices = list(range(start, start + len(texts)))
             if doc_name in self.doc_registry:
                 self.doc_registry[doc_name].extend(indices)
             else:
                 self.doc_registry[doc_name] = indices
-            for i, text in enumerate(texts):
-                entry = {"doc": doc_name}
-                if qualities and i < len(qualities):
-                    entry["quality"] = qualities[i]
-                self.meta.append(entry)
+        for i, _ in enumerate(texts):
+            entry = {"doc": doc_name or ""}
+            if qualities and i < len(qualities):
+                entry["quality"] = qualities[i]
+            self.meta.append(entry)
 
         # 增量写入 SQLite + 自动保存 FAISS
         self._sync_add_batch(start, texts, vectors, doc_name, qualities)
@@ -103,15 +103,77 @@ class BaseVectorStore(ABC):
     def search(self, query_vec: list[float],
                top_k: int = 5) -> list[dict]:
         """向量搜索"""
-        return self._run_search(self.index, query_vec, top_k)
+        search_k = min(self.index.ntotal, top_k + len(self.deleted))
+        return self._run_search(self.index, query_vec, search_k)[:top_k]
 
     @property
     def count(self) -> int:
         return self.index.ntotal
 
+    # Stable access methods used by repositories and services. The legacy
+    # arrays remain temporarily for compatibility with older callers.
+    def get_text(self, index: int) -> str:
+        if index < 0 or index >= len(self.texts):
+            return ""
+        return self.texts[index]
+
+    def get_metadata(self, index: int) -> dict:
+        if index < 0 or index >= len(self.meta):
+            return {}
+        return self.meta[index]
+
+    def is_deleted(self, index: int) -> bool:
+        return index in self.deleted
+
+    def clear(self):
+        self.texts.clear()
+        self.meta.clear()
+        self.doc_registry.clear()
+        self.deleted.clear()
+        self.index = self._build_index()
+        if hasattr(self, "is_trained"):
+            self.is_trained = bool(getattr(self.index, "is_trained", True))
+        if self._conn is not None:
+            self._conn.execute("DELETE FROM chunks")
+            self._conn.commit()
+        self._auto_save()
+
+    def compact(self):
+        self._compact()
+
+    def export_state(self) -> dict:
+        """Return the data needed to rebuild this store with another index."""
+        vectors = []
+        for index in range(self.index.ntotal):
+            try:
+                vectors.append(self.index.reconstruct(index).tolist())
+            except RuntimeError:
+                vectors.append([0.0] * self.dimension)
+        return {
+            "texts": self.texts[:],
+            "vectors": vectors,
+            "doc_registry": {
+                key: value[:] for key, value in self.doc_registry.items()
+            },
+            "meta": [entry.copy() for entry in self.meta],
+            "deleted": set(self.deleted),
+        }
+
+    def import_state(self, state: dict):
+        """Import data produced by :meth:`export_state`."""
+        texts = state.get("texts", [])
+        vectors = state.get("vectors", [])
+        if texts:
+            self.add_batch(texts, vectors)
+        self.doc_registry = {
+            key: value[:] for key, value in state.get("doc_registry", {}).items()
+        }
+        self.meta = [entry.copy() for entry in state.get("meta", self.meta)]
+        self.deleted = set(state.get("deleted", set()))
+
     def get_chunks_by_doc(self, doc_name: str) -> list[str]:
         indices = self.doc_registry.get(doc_name, [])
-        return [self.texts[i] for i in indices]
+        return [self.get_text(i) for i in indices if not self.is_deleted(i)]
 
     def delete_doc(self, doc_name: str):
         """标记删除文档（更新内存 + SQLite + 自动保存）"""
@@ -221,6 +283,8 @@ class BaseVectorStore(ABC):
 
         # 从 SQLite 里的向量重建 FAISS 索引
         self.index = self._rebuild_index_from_db(rows)
+        if hasattr(self, "is_trained"):
+            self.is_trained = bool(getattr(self.index, "is_trained", True))
 
     # ── 文件持久化 ──
 
@@ -326,6 +390,8 @@ class BaseVectorStore(ABC):
 
         # ── 原子替换 ──
         self.index = new_index
+        if hasattr(self, "is_trained"):
+            self.is_trained = bool(getattr(new_index, "is_trained", True))
         self.texts = new_texts
         self.meta = new_meta
         self.doc_registry = new_registry
@@ -348,6 +414,8 @@ class BaseVectorStore(ABC):
         scores, indices = index.search(q, top_k)
         results = []
         for score, idx in zip(scores[0], indices[0]):
+            if idx < 0 or idx in self.deleted:
+                continue
             if idx < len(self.texts):
                 results.append({
                     "text": self.texts[idx],

@@ -2,7 +2,6 @@
 import time
 import os
 import jieba
-import numpy as np
 import torch
 from config import config
 from .logger import get_logger, setup_logging
@@ -14,6 +13,7 @@ from .llm_service import LLMService
 from .retriever import Retriever
 from .ingestion import IngestionService
 from .reranker import Reranker
+from .index_service import IndexService
 
 log = get_logger("cli")
 setup_logging(
@@ -29,8 +29,20 @@ INDEX_TYPES = {
 }
 
 
+def _create_index(index_type: str, dimension: int):
+    if index_type == "ivf":
+        return IvfVectorStore(dimension, nlist=config["index"]["ivf"]["nlist"])
+    if index_type == "hnsw":
+        return HnswVectorStore(dimension, M=config["index"]["hnsw"]["M"])
+    return FaissVectorStore(dimension)
+
+
 def run():
-    emb = EmbeddingService()
+    cfg_embedding = config["embedding"]
+    emb = EmbeddingService(
+        model_name=cfg_embedding["model"],
+        device=cfg_embedding["device"],
+    )
     current_type = config["index"]["type"]
 
     idx_cls = INDEX_TYPES.get(current_type)
@@ -38,7 +50,7 @@ def run():
         log.warning(f"不支持的索引类型: {current_type}，回退到 flat")
         db = FaissVectorStore(emb.dimension)
     else:
-        db = idx_cls(emb.dimension)
+        db = _create_index(current_type, emb.dimension)
     log.info("系统启动", index_type=current_type, dim=emb.dimension)
 
     # LLM
@@ -64,9 +76,11 @@ def run():
         reranker = None
         log.warning("重排序器未加载", error=str(e))
     retriever = Retriever(db, reranker=reranker)
+    index_service = IndexService(db, index_factory=_create_index)
 
     # 入库
     ingestion = IngestionService(emb, db, retriever)
+    index_service.bind_consumers(retriever=retriever, ingestion=ingestion)
 
     cfg_search = config["retrieval"]
 
@@ -85,10 +99,10 @@ def run():
         cmd = input().strip()
 
         if cmd == "/exit":
-            if db._save_path_prefix is not None:
+            if index_service.has_save_path:
                 log.info("自动保存中")
                 try:
-                    db.save(db._save_path_prefix)
+                    index_service.save()
                 except Exception as e:
                     log.error("自动保存失败", error=str(e))
             log.info("系统退出")
@@ -214,97 +228,71 @@ def run():
             if idx_type not in INDEX_TYPES:
                 log.warning("不支持的索引类型", type=idx_type)
             else:
-                n = db.count
-                old_texts = db.texts[:]
-                old_registry = getattr(db, 'doc_registry', {}).copy()
-                old_meta = getattr(db, 'meta', []).copy()
-                old_deleted = getattr(db, 'deleted', set()).copy()
-                old_vecs = None
-                if n > 0:
-                    old_vecs = np.zeros((n, db.dimension), dtype=np.float32)
-                    try:
-                        db.index.reconstruct_n(0, n, old_vecs)
-                    except RuntimeError:
-                        for i in range(n):
-                            old_vecs[i] = db.index.reconstruct(i)
-
-                db = INDEX_TYPES[idx_type](emb.dimension)
-                if old_texts:
-                    db.add_batch(old_texts, old_vecs.tolist())
-                    db.doc_registry = old_registry
-                    db.meta = old_meta
-                    db.deleted = old_deleted
-                    retriever._rebuild_bm25(old_texts)
-
-                retriever.db = db
-                ingestion.db = db
+                n = index_service.count
+                index_service.switch_index(idx_type)
+                index_service.bind_consumers(
+                    retriever=retriever, ingestion=ingestion
+                )
+                db = index_service.vector_store
                 current_type = idx_type
                 log.info("索引已切换", to=idx_type, count=n)
 
         elif cmd.startswith("/delete "):
             doc_name = cmd[len("/delete "):].strip()
-            db.delete_doc(doc_name)
+            index_service.delete_document(doc_name)
             log.info("文档已标记删除", doc=doc_name)
 
-	        elif cmd.startswith("/add "):
-	            try:
-	                rest = cmd[len("/add "):].strip()
-	                parts = rest.split(" ")
-	                path = parts[0]
-	                if not path:
-	                    print("用法: /add <文件路径> [ocr|marker]")
-	                    continue
-	                method = "auto"
-	                for p in parts[1:]:
-	                    if p in ("ocr", "marker"):
-	                        continue
-	                    method = p
-	                force_ocr = "ocr" in parts
-	                use_marker = "marker" in parts
-	                n, fname = ingestion.add(
-	                    path, chunk_method=method,
-	                    force_ocr=force_ocr, use_marker=use_marker
-	                )
-	                if n:
-	                    log.info("文件入库完成", file=fname, chunks=n)
-	            except Exception as e:
-	                log.error("添加失败", error=str(e))
+        elif cmd.startswith("/add "):
+            try:
+                rest = cmd[len("/add "):].strip()
+                parts = rest.split(" ")
+                path = parts[0]
+                if not path:
+                    print("用法: /add <文件路径> [ocr|marker]")
+                    continue
+                method = "auto"
+                for p in parts[1:]:
+                    if p in ("ocr", "marker"):
+                        continue
+                    method = p
+                force_ocr = "ocr" in parts
+                use_marker = "marker" in parts
+                n, fname = ingestion.add(
+                    path, chunk_method=method,
+                    force_ocr=force_ocr, use_marker=use_marker
+                )
+                if n:
+                    log.info("文件入库完成", file=fname, chunks=n)
+            except Exception as e:
+                log.error("添加失败", error=str(e))
 
         elif cmd == "/clear":
             print("确认清空所有数据？(yes/no): ", end="", flush=True)
             confirm = input().strip()
             if confirm == "yes":
-                db.texts.clear()
-                db.meta.clear()
-                db.doc_registry.clear()
-                db.deleted.clear()
-                db.index = db._build_index()
+                index_service.clear()
                 retriever._tokenized.clear()
                 retriever._bm25 = None
-                if db._conn is not None:
-                    db._conn.execute("DELETE FROM chunks")
-                    db._conn.commit()
                 log.info("所有数据已清空")
             else:
                 print("已取消")
 
         elif cmd == "/list":
-            docs = list(db.doc_registry.keys())
+            documents = index_service.list_documents()
+            docs = [item["doc"] for item in documents if not item["deleted"]]
             if not docs:
                 print("（暂无文档）")
             else:
                 print(f"共 {len(docs)} 个文档：")
-                for d in docs:
-                    n = len(db.doc_registry[d])
-                    flag = " 🗑️" if any(i in db.deleted for i in
-                                        db.doc_registry[d]) else ""
-                    print(f"  {d}（{n} 个 chunk）{flag}")
+                for item in documents:
+                    flag = " [deleted]" if item["deleted"] else ""
+                    print(f"  {item['doc']} ({item['count']} chunks){flag}")
 
         elif cmd.startswith("/save "):
             try:
                 path = cmd[len("/save "):].strip()
-                db._compact()
-                db.save(path)
+                index_service.compact()
+                index_service.save(path)
                 log.info("已保存", path=path, count=db.count)
             except Exception as e:
                 log.error("保存失败", error=str(e))
@@ -312,9 +300,11 @@ def run():
         elif cmd.startswith("/load "):
             try:
                 path = cmd[len("/load "):].strip()
-                db.load(path)
-                if db.texts:
-                    retriever._rebuild_bm25(db.texts)
+                index_service.load(path)
+                index_service.bind_consumers(
+                    retriever=retriever, ingestion=ingestion
+                )
+                db = index_service.vector_store
                 log.info("已加载", path=path, count=db.count)
             except Exception as e:
                 log.error("加载失败", error=str(e))

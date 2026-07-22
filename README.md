@@ -16,7 +16,7 @@
 - **动态质量评分 v2**：统计指标 + OCR 重复检测 + jieba 碎片分类
 - **YAML 配置中心**：环境变量可覆写，修改参数无需改代码
 - **结构化日志**：支持 JSON 格式，文件 + 控制台双输出
-- **评估框架**：benchmark 消融实验 / batch_test 批量测试 / LLM 质量审计
+- **评估框架**：解析检查 / 检索基线 / QA 黄金集，覆盖文档抽取、召回证据和回答约束
 
 ## 项目结构
 
@@ -26,11 +26,14 @@ rag-knowledge-base/
 │   ├── __init__.py            # YAML 配置加载器（支持环境变量覆写）
 │   └── default.yaml           # 默认配置（embedding/chunking/retrieval/...）
 ├── eval/
-│   ├── queries.json           # 15 条标注测试查询
-│   ├── metrics.py             # Recall@5 / MRR / NDCG
-│   ├── benchmark.py           # 消融实验（7 chunk × 3 检索模式）
-│   ├── batch_test.py          # 批量导入 + 质量摘要
-│   └── llm_quality_check.py   # LLM 质量审计 + 判题
+│   ├── extraction_checks.jsonl # PDF 解析质量检查
+│   ├── retrieval_queries.jsonl # 检索证据集
+│   ├── qa_golden.jsonl         # QA 黄金答案约束
+│   ├── document_manifest.json  # 受测文档哈希清单
+│   ├── evaluation.py           # 评测判定规则
+│   ├── run_extraction_checks.py # 解析检查入口
+│   ├── run_baseline.py         # 检索基线入口
+│   └── validate_dataset.py     # 测试集校验入口
 ├── main.py                    # CLI 入口
 ├── src/
 │   ├── cli.py                 # 命令解析与主循环
@@ -54,7 +57,8 @@ rag-knowledge-base/
 │       ├── ivf_store.py       # IVF 倒排索引
 │       └── hnsw_store.py      # HNSW 图索引
 ├── tests/
-│   └── test_e2e.py            # 端到端测试
+│   ├── test_core_regressions.py   # 核心回归测试
+│   └── test_evaluation_contracts.py # 评测规则契约测试
 └── data/                      # 测试数据目录
 ```
 
@@ -68,15 +72,14 @@ rag-knowledge-base/
 ### 安装
 
 ```bash
-# 基础依赖
-pip install faiss-cpu jieba rank-bm25 numpy sentence-transformers python-docx
-pip install PyMuPDF pdfplumber easyocr
+# 运行依赖
+pip install -r requirements.txt
 
-# LLM（可选）
-pip install openai
+# 开发 / 测试依赖
+pip install -r requirements-dev.txt
 
-# Marker PDF 解析（可选，需 GPU）
-pip install marker-pdf
+# 可选重依赖（PaddleOCR / Marker）
+pip install -r requirements-optional.txt
 ```
 
 ### 启动
@@ -84,6 +87,28 @@ pip install marker-pdf
 ```bash
 python main.py
 ```
+
+## 评测
+
+本项目的评测分三层：
+
+```bash
+# 校验评测集结构、文档哈希和页码锚点覆盖
+python eval/validate_dataset.py
+
+# 快速验证带页码锚点的 PDF 解析样本
+python eval/run_extraction_checks.py --quick
+
+# 检索基线，可按 ID 查看命中的证据 chunk
+python eval/run_baseline.py --ids ret_evac_003 --show-matches --show-top 5 --only-query-docs --no-reranker --no-ocr-fallback
+```
+
+检索评测支持两种证据策略：
+
+- `same_chunk`：默认策略，要求同一个 chunk 同时包含证据组中的所有关键词，适合数值事实、定义、引用类问题。
+- `multi_chunk_same_doc`：允许同一正确文档内多个 chunk 合并覆盖证据，适合列表型问题、表格页和图纸页。
+
+评测 PDF 不提交到仓库，需要将 `eval/document_manifest.json` 中列出的文件放入 `data/`，并保持文件哈希一致。
 
 ## CLI 命令
 
@@ -172,7 +197,7 @@ retrieval:
 - [x] 动态质量评分 v2（统计 + OCR + jieba）
 - [x] YAML 配置中心 + 环境变量覆写
 - [x] 结构化日志（JSON + 文件输出）
-- [x] 评估框架（benchmark / batch_test / LLM 审计）
+- [x] 评估框架（解析检查 / 检索基线 / QA 黄金集）
 - [x] 轻量混合 PDF 读取（逐块乱码检测 + OCR 替换）
 - [ ] FastAPI Web 接口
 - [ ] 知识库治理与监控

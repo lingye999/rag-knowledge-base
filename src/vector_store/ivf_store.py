@@ -6,10 +6,10 @@ class IvfVectorStore(BaseVectorStore):
     """IVF 倒排索引"""
 
     def __init__(self, dimension: int, nlist: int = 100):
-        super().__init__(dimension, index_type="ivf",
-                         index_params={"nlist": nlist})
         self.nlist = nlist
         self.is_trained = False
+        super().__init__(dimension, index_type="ivf",
+                         index_params={"nlist": nlist})
 
     def _build_index(self):
         """返回一个占位索引，真正训练在 _before_add 中完成"""
