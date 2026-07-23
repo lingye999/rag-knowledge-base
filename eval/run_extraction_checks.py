@@ -1,4 +1,4 @@
-"""Run deterministic parsing checks from extraction_checks.jsonl."""
+"""根据 extraction_checks.jsonl 运行确定性的文档解析检查。"""
 from __future__ import annotations
 
 import argparse
@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from eval.evaluation import contains_all, normalize
-from src.document import read_file_structured
+from src.parsing.document import read_file_structured
 
 DATASET = ROOT / "eval" / "extraction_checks.jsonl"
 DATA_DIR = ROOT / "data"
@@ -50,7 +50,7 @@ def run(dataset: Path = DATASET, ids: set[str] | None = None,
     if quick:
         rows = [row for row in rows if row.get("page") is not None]
     if not rows:
-        print("No extraction checks selected.")
+        print("未选中任何解析检查项。")
         return 1
     requested_pages = defaultdict(set)
     full_documents = set()
@@ -68,13 +68,13 @@ def run(dataset: Path = DATASET, ids: set[str] | None = None,
         if key not in cache:
             pages = None if key in full_documents else requested_pages[key]
             label = "all" if pages is None else ",".join(map(str, sorted(pages)))
-            print(f"PARSE {row['doc']} page={label}", flush=True)
+            print(f"正在解析 {row['doc']}，页码={label}", flush=True)
             started = time.perf_counter()
             cache[key] = _read(
                 DATA_DIR / row["doc"], row["parser_mode"], pages, allow_ocr
             )
             elapsed = time.perf_counter() - started
-            print(f"DONE  {row['doc']} page={label} ({elapsed:.1f}s)", flush=True)
+            print(f"解析完成 {row['doc']}，页码={label}（{elapsed:.1f} 秒）", flush=True)
         parsed = cache[key]
         if page is None:
             text = parsed.text
@@ -103,7 +103,7 @@ def run(dataset: Path = DATASET, ids: set[str] | None = None,
     for row, result in zip(rows, results):
         grouped[row["parser_mode"]].append(result)
     passed = sum(result["passed"] for result in results)
-    print(f"\nExtraction pass rate: {passed}/{len(results)} ({passed / len(results):.1%})")
+    print(f"\n解析通过率：{passed}/{len(results)} ({passed / len(results):.1%})")
     for mode, group in sorted(grouped.items()):
         count = sum(result["passed"] for result in group)
         print(f"  {mode}: {count}/{len(group)} ({count / len(group):.1%})")
@@ -113,11 +113,11 @@ def run(dataset: Path = DATASET, ids: set[str] | None = None,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, default=DATASET)
-    parser.add_argument("--ids", help="Comma-separated extraction check IDs")
+    parser.add_argument("--ids", help="要执行的解析检查 ID，多个 ID 用英文逗号分隔")
     parser.add_argument("--quick", action="store_true",
-                        help="Run only checks with page anchors")
+                        help="仅执行带页码锚点的检查")
     parser.add_argument("--no-ocr", action="store_true",
-                        help="Do not activate OCR fallback during this run")
+                        help="本次执行不启用 OCR 回退")
     args = parser.parse_args()
     selected_ids = set(args.ids.split(",")) if args.ids else None
     raise SystemExit(run(

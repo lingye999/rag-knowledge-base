@@ -5,15 +5,15 @@ import jieba
 import torch
 from config import config
 from .logger import get_logger, setup_logging
-from .embedding import EmbeddingService
+from .services.embedding import EmbeddingService
 from .vector_store.faiss_store import FaissVectorStore
 from .vector_store.ivf_store import IvfVectorStore
 from .vector_store.hnsw_store import HnswVectorStore
-from .llm_service import LLMService
-from .retriever import Retriever
-from .ingestion import IngestionService
-from .reranker import Reranker
-from .index_service import IndexService
+from .retrieval.reranker import Reranker
+from .retrieval.retriever import Retriever
+from .services.index_service import IndexService
+from .services.ingestion import IngestionService
+from .services.llm_service import LLMService
 
 log = get_logger("cli")
 setup_logging(

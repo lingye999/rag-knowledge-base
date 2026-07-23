@@ -27,30 +27,38 @@ rag-knowledge-base/
 │   └── default.yaml           # 默认配置（embedding/chunking/retrieval/...）
 ├── eval/
 │   ├── extraction_checks.jsonl # PDF 解析质量检查
-│   ├── retrieval_queries.jsonl # 检索证据集
-│   ├── qa_golden.jsonl         # QA 黄金答案约束
+│   ├── datasets/               # smoke / dev / test 检索与 QA 数据集
 │   ├── document_manifest.json  # 受测文档哈希清单
 │   ├── evaluation.py           # 评测判定规则
+│   ├── generation_judge.py     # 生成侧 LLM 裁判
 │   ├── run_extraction_checks.py # 解析检查入口
 │   ├── run_baseline.py         # 检索基线入口
+│   ├── run_generation_eval.py  # 生成侧质量评测入口
 │   └── validate_dataset.py     # 测试集校验入口
 ├── main.py                    # CLI 入口
 ├── src/
 │   ├── cli.py                 # 命令解析与主循环
-│   ├── embedding.py           # 文本向量化 (BAAI/bge-small-zh-v1.5)
-│   ├── document.py            # 多格式文档读取
-│   ├── hybrid_reader.py       # 轻量混合 PDF 读取（逐块乱码检测 + OCR）
-│   ├── chunker.py             # 文本分块（5 种策略，参数可配置）
-│   ├── cleaner.py             # 文本清洗 + OCR 空白清理
-│   ├── plumber.py             # pdfplumber 文本提取
-│   ├── ocr.py                 # EasyOCR 图片识别
-│   ├── marker_reader.py       # Marker AI 深度解析
-│   ├── quality_scorer.py      # 动态质量评分 v2（统计 + OCR + jieba）
-│   ├── ingestion.py           # 入库流水线
-│   ├── retriever.py           # 检索引擎（Dense + BM25 → RRF → 3D → 精排）
-│   ├── reranker.py            # Cross-Encoder 精排器（log 长度归一化）
-│   ├── llm_service.py         # LLM 服务（改写/自查询/问答）
 │   ├── logger.py              # 结构化日志（JSON / 纯文本）
+│   ├── parsing/               # PDF、OCR、文本清洗和解析结果模型
+│   │   ├── document.py        # 多格式文档读取
+│   │   ├── hybrid_reader.py   # 轻量混合 PDF 读取（逐块乱码检测 + OCR）
+│   │   ├── marker_reader.py   # Marker AI 深度解析
+│   │   ├── ocr.py             # EasyOCR 图片识别
+│   │   ├── parse_result.py     # 结构化解析结果与页码信息
+│   │   ├── plumber.py         # pdfplumber 文本提取
+│   │   └── cleaner.py         # 文本清洗 + OCR 空白清理
+│   ├── retrieval/             # 分块、混合检索、重排序和 chunk 元数据
+│   │   ├── chunk.py           # 带文档来源的检索单元
+│   │   ├── chunk_repository.py # chunk 文本与元数据访问边界
+│   │   ├── chunker.py         # 文本分块（5 种策略，参数可配置）
+│   │   ├── retriever.py       # Dense + BM25 → RRF → 3D → 精排
+│   │   ├── reranker.py        # Cross-Encoder 精排器
+│   │   └── quality_scorer.py  # 动态质量评分 v2（统计 + OCR + jieba）
+│   ├── services/              # 向量化、入库、索引和 LLM 服务
+│   │   ├── embedding.py       # 文本向量化 (BAAI/bge-small-zh-v1.5)
+│   │   ├── ingestion.py       # 入库流水线
+│   │   ├── index_service.py   # 索引切换与状态迁移
+│   │   └── llm_service.py     # LLM 服务（改写/自查询/问答）
 │   └── vector_store/
 │       ├── base.py            # 抽象基类（模板方法 + 工厂）
 │       ├── faiss_store.py     # Flat 精确索引
@@ -107,6 +115,24 @@ python eval/run_baseline.py --ids ret_evac_003 --show-matches --show-top 5 --onl
 
 - `same_chunk`：默认策略，要求同一个 chunk 同时包含证据组中的所有关键词，适合数值事实、定义、引用类问题。
 - `multi_chunk_same_doc`：允许同一正确文档内多个 chunk 合并覆盖证据，适合列表型问题、表格页和图纸页。
+
+每次检索基线会对正样本输出 `Evidence Recall@K`、`Context Precision@K`、`MRR` 和 `nDCG@K`。带 `page` 的证据会同时校验文档和页码；可使用 `--report eval/reports/baseline.json` 保存逐题指标与汇总，便于比较检索参数改动前后的结果。新的严格检索集位于 `eval/datasets/`：`smoke` 用于快速回归，`dev` 用于调参，`test` 用于冻结验收。
+
+```powershell
+python eval/run_baseline.py --dataset smoke --no-reranker
+python eval/run_baseline.py --dataset dev --no-reranker --report eval/reports/dev.json
+python eval/run_baseline.py --dataset test --no-reranker --report eval/reports/test.json
+```
+
+生成侧评测使用与检索集同名的 QA 集，并验证答案事实、上下文覆盖、引用有效性，以及可选的 LLM 忠实度裁判：
+
+```powershell
+python eval/run_generation_eval.py --dataset smoke --ids qa_smoke_evac_001 --judge none --no-reranker
+python eval/run_generation_eval.py --dataset dev --output eval/artifacts/dev_generation.jsonl
+python eval/run_generation_eval.py --dataset test --output eval/artifacts/test_generation.jsonl
+```
+
+生成侧调用 LLM，运行前需要配置 `DEEPSEEK_API_KEY`。`--judge none` 只跳过第二个 LLM 裁判，不跳过生成答案的 LLM 调用。
 
 评测 PDF 不提交到仓库，需要将 `eval/document_manifest.json` 中列出的文件放入 `data/`，并保持文件哈希一致。
 

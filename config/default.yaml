@@ -24,6 +24,13 @@ chunking:
 # 检索参数
 retrieval:
   top_k: 5
+  retrieve_top: 30           # internal candidate pool before final context selection
+  doc_recall_top_docs: 3     # high-scoring documents used for document-internal recall
+  doc_recall_per_doc: 5      # supplemental chunks per high-scoring document
+  neighbor_window: 1         # parent-child expansion window around candidate chunks
+  duplicate_threshold: 0.82  # character n-gram Jaccard threshold for final de-duplication
+  enable_doc_recall: true
+  enable_neighbor_expand: true
   rrf_k: 60
   chunk_decay: 0.2         # Route B 几何衰减系数
   alpha: 0.7                # chunk 相关性权重

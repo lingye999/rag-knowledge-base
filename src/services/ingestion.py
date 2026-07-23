@@ -1,10 +1,11 @@
 """文档入库：读取 → 清洗 → 分块 → 质量评分 → 向量化 → 入库 + BM25 索引"""
 
 import os
-from .document import read_file_structured
-from .chunker import chunk_text
-from .cleaner import clean_ocr_text
-from .quality_scorer import compute_quality_scores
+from dataclasses import replace
+from ..parsing.cleaner import clean_ocr_text
+from ..parsing.document import read_file_structured
+from ..retrieval.chunker import chunk_blocks
+from ..retrieval.quality_scorer import compute_quality_scores
 
 
 class IngestionService:
@@ -44,29 +45,40 @@ class IngestionService:
             use_marker=use_marker,
             allow_ocr=allow_ocr,
         )
-        text = parsed.text
-        text = clean_ocr_text(text)
-        chunks = chunk_text(text, chunk_method)
+        doc_name = os.path.basename(file_path)
+        cleaned_blocks = [
+            replace(block, text=clean_ocr_text(block.text))
+            for block in parsed.blocks
+            if block.text.strip()
+        ]
+        chunks = chunk_blocks(cleaned_blocks, chunk_method, doc_name)
         if not chunks:
             print(f"[警告] 文件 {file_path} 未提取到有效文本块，已跳过")
             return 0, ""
 
-        vectors = self.emb.encode_batch(chunks)
+        texts = [chunk.text for chunk in chunks]
+        vectors = self.emb.encode_batch(texts)
         if not vectors:
             print(f"[警告] 文件 {file_path} 向量化失败，已跳过")
             return 0, ""
 
-        doc_name = os.path.basename(file_path)
-        qualities = compute_quality_scores(chunks)  # ← 算质量分
+        qualities = compute_quality_scores(texts)  # ← 算质量分
+        chunks = [
+            replace(chunk, quality=quality)
+            for chunk, quality in zip(chunks, qualities)
+        ]
         if self.repository is not None:
-            self.repository.add_batch(
-                chunks, vectors, doc_name=doc_name, qualities=qualities
-            )
+            self.repository.add_batch(chunks, vectors)
         else:
             self.db.add_batch(
-                chunks, vectors, doc_name=doc_name, qualities=qualities
+                texts,
+                vectors,
+                doc_name=doc_name,
+                qualities=qualities,
+                pages=[chunk.page for chunk in chunks],
+                sources=[chunk.source for chunk in chunks],
             )
-        self.retriever.add_texts(chunks)  # ← 同时构建 BM25 索引
+        self.retriever.add_texts(texts)  # ← 同时构建 BM25 索引
 
         mode = "Marker" if use_marker else ("OCR模式" if force_ocr else "默认(混合)")
         print(f"文件 {file_path} 加载完成({mode}): {len(chunks)} 个文本块")

@@ -7,6 +7,8 @@ arrays directly.
 from dataclasses import dataclass
 from typing import Any
 
+from .chunk import Chunk
+
 
 @dataclass(frozen=True, slots=True)
 class ChunkRecord:
@@ -14,6 +16,8 @@ class ChunkRecord:
     text: str
     doc: str = ""
     quality: float = 0.5
+    page: int | None = None
+    source: str | None = None
     deleted: bool = False
 
 
@@ -36,6 +40,8 @@ class ChunkRepository:
             text=self._store.get_text(index),
             doc=metadata.get("doc", ""),
             quality=float(metadata.get("quality", 0.5)),
+            page=metadata.get("page"),
+            source=metadata.get("source"),
             deleted=self._store.is_deleted(index),
         )
 
@@ -47,7 +53,12 @@ class ChunkRepository:
         record = self.get(index)
         if record is None:
             return {}
-        return {"doc": record.doc, "quality": record.quality}
+        return {
+            "doc": record.doc,
+            "quality": record.quality,
+            "page": record.page,
+            "source": record.source,
+        }
 
     def all_texts(self, include_deleted: bool = True) -> list[str]:
         return [
@@ -80,12 +91,28 @@ class ChunkRepository:
                 names.append(record.doc)
         return names
 
-    def add_batch(self, texts, vectors, doc_name=None, qualities=None):
+    def add_batch(self, chunks, vectors, doc_name=None, qualities=None,
+                  pages=None, sources=None):
+        """Store legacy text lists or structured :class:`Chunk` instances."""
+        if chunks and isinstance(chunks[0], Chunk):
+            chunk_docs = {chunk.doc for chunk in chunks}
+            if doc_name is None:
+                if len(chunk_docs) != 1:
+                    raise ValueError("A batch of Chunk objects must belong to one document")
+                doc_name = chunk_docs.pop()
+            texts = [chunk.text for chunk in chunks]
+            pages = [chunk.page for chunk in chunks]
+            sources = [chunk.source for chunk in chunks]
+            qualities = qualities or [chunk.quality for chunk in chunks]
+        else:
+            texts = chunks
         return self._store.add_batch(
             texts,
             vectors,
             doc_name=doc_name,
             qualities=qualities,
+            pages=pages,
+            sources=sources,
         )
 
     def delete_document(self, doc_name: str):
@@ -96,4 +123,3 @@ class ChunkRepository:
 
     def refresh_store(self, vector_store):
         self._store = vector_store
-

@@ -1,0 +1,4 @@
+{"id":"qa_test_evac_001","retrieval_id":"test_evac_001","query":"E-VAC 断路器采用什么工艺将真空灭弧室固封在绝缘筒中？","expected_answer":"E-VAC 采用成熟的 APG 工艺，将真空灭弧室固封在绝缘筒中。","required_facts":["APG工艺","真空灭弧室","固封"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_test_evac_002","retrieval_id":"test_evac_002","query":"E-VAC 断路器选型表列出了哪两种型号？","expected_answer":"选型表列出手车式和固定式两种型号。","required_facts":["手车式","固定式"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_test_med_001","retrieval_id":"test_med_001","query":"全球医疗支出预计从 2015 年的多少增长到 2020 年的多少？","expected_answer":"全球医疗支出预计从 2015 年的 7 万亿美元增长到 2020 年的 8.7 万亿美元。","required_facts":["7万亿美元","8.7万亿美元"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_test_gbz185_001","retrieval_id":"test_gbz185_002","query":"标准中“技能”指的是什么？","expected_answer":"技能是智能体的功能。","required_facts":["技能","智能体的功能"],"forbidden_claims":[],"citation_required":true}
