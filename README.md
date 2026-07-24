@@ -1,6 +1,46 @@
 # RAG Knowledge Base
 
-基于 FAISS 的智能 RAG（检索增强生成）知识库系统，从零实现的深度学习项目。
+基于 FAISS 的企业级 RAG（检索增强生成）知识库系统，从零实现的深度学习项目。
+
+## 系统架构
+
+```
+                               ┌──────────────┐
+                               │   main.py    │
+                               └──────┬───────┘
+                                      │
+            ┌─────────────────────────┼─────────────────────────┐
+            │                         │                         │
+    ┌───────▼───────┐        ┌────────▼────────┐       ┌────────▼────────┐
+    │   CLI 交互     │        │   配置中心       │       │   评估体系       │
+    │  src/cli.py   │        │ config/*.yaml   │       │   eval/         │
+    └───────┬───────┘        └─────────────────┘       └─────────────────┘
+            │
+    ┌───────┼───────────────────────────────┐
+    │       │                               │
+    ▼       ▼                               ▼
+┌──────────────┐  ┌──────────────────┐  ┌──────────────┐
+│ 检索层        │  │ 服务层            │  │ 文档解析层    │
+│ retrieval/   │  │ services/        │  │ parsing/     │
+│              │  │                  │  │              │
+│ retriever    │  │ embedding        │  │ document     │
+│ first_stage  │  │ llm_service      │  │ hybrid_reader│
+│ doc_recall   │  │ ingestion        │  │ marker_reader│
+│ final_sel.   │  │ index_service    │  │ plumber      │
+│ reranker     │  │                  │  │ ocr          │
+│ quality_sc.  │  └────────┬─────────┘  │ quality_gate │
+│ bm25_index   │           │            │ cleaner      │
+│ chunker      │           │            └──────────────┘
+└──────┬───────┘           │
+       │                   │
+       └───────────┬───────┘
+                   │
+           ┌───────▼───────┐
+           │  向量存储层     │
+           │  vector_store/ │
+           │  Flat/IVF/HNSW │
+           └───────────────┘
+```
 
 ## 功能特性
 
@@ -23,58 +63,58 @@
 ```
 rag-knowledge-base/
 ├── config/
-│   ├── __init__.py            # YAML 配置加载器（支持环境变量覆写）
-│   └── default.yaml           # 默认配置（embedding/chunking/retrieval/...）
+│   ├── __init__.py              # YAML 配置加载器（支持环境变量覆写）
+│   └── default.yaml             # 默认配置（embedding/chunking/retrieval/...）
 ├── eval/
-│   ├── extraction_checks.jsonl # PDF 解析质量检查
-│   ├── datasets/               # smoke / dev / test 检索与 QA 数据集
-│   ├── document_manifest.json  # 受测文档哈希清单
-│   ├── evaluation.py           # 评测判定规则
-│   ├── generation_judge.py     # 生成侧 LLM 裁判
+│   ├── extraction_checks.jsonl  # PDF 解析质量检查
+│   ├── datasets/                # smoke / dev / test 检索与 QA 数据集
+│   ├── document_manifest.json   # 受测文档哈希清单
+│   ├── evaluation.py            # 评测判定规则
+│   ├── generation_judge.py      # 生成侧 LLM 裁判
 │   ├── run_extraction_checks.py # 解析检查入口
-│   ├── run_baseline.py         # 检索基线入口
+│   ├── run_baseline.py          # 检索基线入口
 │   ├── run_retrieval_diagnostics.py # 检索链路诊断报告
-│   ├── run_generation_eval.py  # 生成侧质量评测入口
-│   └── validate_dataset.py     # 测试集校验入口
-├── main.py                    # CLI 入口
+│   ├── run_generation_eval.py   # 生成侧质量评测入口
+│   └── validate_dataset.py      # 测试集校验入口
+├── main.py                      # CLI 入口
 ├── src/
-│   ├── cli.py                 # 命令解析与主循环
-│   ├── logger.py              # 结构化日志（JSON / 纯文本）
-│   ├── parsing/               # PDF、OCR、文本清洗和解析结果模型
-│   │   ├── document.py        # 多格式文档读取
-│   │   ├── hybrid_reader.py   # 轻量混合 PDF 读取（逐块乱码检测 + OCR）
-│   │   ├── marker_reader.py   # Marker AI 深度解析
-│   │   ├── ocr.py             # EasyOCR 图片识别
-│   │   ├── parse_result.py     # 结构化解析结果与页码信息
-│   │   ├── plumber.py         # pdfplumber 文本提取
-│   │   └── cleaner.py         # 文本清洗 + OCR 空白清理
-│   ├── retrieval/             # 分块、混合检索、重排序和 chunk 元数据
-│   │   ├── chunk.py           # 带文档来源的检索单元
-│   │   ├── chunk_repository.py # chunk 文本与元数据访问边界
-│   │   ├── chunker.py         # 文本分块（5 种策略，参数可配置）
-│   │   ├── bm25_index.py      # BM25 关键词侧索引
-│   │   ├── first_stage.py     # Dense + BM25 → RRF → 三维度评分
-│   │   ├── document_recall.py # 文档内部补召回 + 邻居扩展
-│   │   ├── final_selector.py  # 最终重打分、精排、过滤和去重
-│   │   ├── result_utils.py    # 候选结果转换与按 index 去重
-│   │   ├── text_matching.py   # 查询词、锚点词和近重复判断
-│   │   ├── retriever.py       # 检索流程外观类，保留旧 API
-│   │   ├── reranker.py        # Cross-Encoder 精排器
-│   │   └── quality_scorer.py  # 动态质量评分 v2（统计 + OCR + jieba）
-│   ├── services/              # 向量化、入库、索引和 LLM 服务
-│   │   ├── embedding.py       # 文本向量化 (BAAI/bge-small-zh-v1.5)
-│   │   ├── ingestion.py       # 入库流水线
-│   │   ├── index_service.py   # 索引切换与状态迁移
-│   │   └── llm_service.py     # LLM 服务（改写/自查询/问答）
+│   ├── cli.py                   # 命令解析与主循环
+│   ├── logger.py                # 结构化日志（JSON / 纯文本）
+│   ├── parsing/                 # PDF、OCR、文本清洗和解析结果模型
+│   │   ├── document.py          # 多格式文档读取
+│   │   ├── hybrid_reader.py     # 轻量混合 PDF 读取（逐块乱码检测 + OCR）
+│   │   ├── marker_reader.py     # Marker AI 深度解析
+│   │   ├── ocr.py               # EasyOCR 图片识别
+│   │   ├── parse_result.py      # 结构化解析结果与页码信息
+│   │   ├── plumber.py           # pdfplumber 文本提取
+│   │   └── cleaner.py           # 文本清洗 + OCR 空白清理
+│   ├── retrieval/               # 分块、混合检索、重排序和 chunk 元数据
+│   │   ├── chunk.py             # 带文档来源的检索单元
+│   │   ├── chunk_repository.py  # chunk 文本与元数据访问边界
+│   │   ├── chunker.py           # 文本分块（5 种策略，参数可配置）
+│   │   ├── bm25_index.py        # BM25 关键词侧索引
+│   │   ├── first_stage.py       # Dense + BM25 → RRF → 三维度评分
+│   │   ├── document_recall.py   # 文档内部补召回 + 邻居扩展
+│   │   ├── final_selector.py    # 最终重打分、精排、过滤和去重
+│   │   ├── result_utils.py      # 候选结果转换与按 index 去重
+│   │   ├── text_matching.py     # 查询词、锚点词和近重复判断
+│   │   ├── retriever.py         # 检索流程外观类，保留旧 API
+│   │   ├── reranker.py          # Cross-Encoder 精排器
+│   │   └── quality_scorer.py    # 动态质量评分 v2（统计 + OCR + jieba）
+│   ├── services/                # 向量化、入库、索引和 LLM 服务
+│   │   ├── embedding.py         # 文本向量化 (BAAI/bge-small-zh-v1.5)
+│   │   ├── ingestion.py         # 入库流水线
+│   │   ├── index_service.py     # 索引切换与状态迁移
+│   │   └── llm_service.py       # LLM 服务（改写/自查询/问答）
 │   └── vector_store/
-│       ├── base.py            # 抽象基类（模板方法 + 工厂）
-│       ├── faiss_store.py     # Flat 精确索引
-│       ├── ivf_store.py       # IVF 倒排索引
-│       └── hnsw_store.py      # HNSW 图索引
+│       ├── base.py              # 抽象基类（模板方法 + 工厂）
+│       ├── faiss_store.py       # Flat 精确索引
+│       ├── ivf_store.py         # IVF 倒排索引
+│       └── hnsw_store.py        # HNSW 图索引
 ├── tests/
-│   ├── test_core_regressions.py   # 核心回归测试
+│   ├── test_core_regressions.py     # 核心回归测试
 │   └── test_evaluation_contracts.py # 评测规则契约测试
-└── data/                      # 测试数据目录
+└── data/                        # 测试数据目录
 ```
 
 ## 快速开始
