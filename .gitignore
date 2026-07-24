@@ -250,3 +250,7 @@ Day3-4_实施报告.md
 data/*.docx
 data/*.pdf
 .zcode/
+
+# 生成侧评测的本地运行工件
+eval/artifacts/
+eval/reports/

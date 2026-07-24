@@ -1,7 +1,7 @@
 from rank_bm25 import BM25Okapi
 import jieba
 import numpy as np
-from ..chunk_repository import ChunkRepository
+from ..retrieval.chunk_repository import ChunkRepository
 
 
 class HybridRetriever:

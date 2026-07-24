@@ -1,6 +1,7 @@
 from openai import OpenAI
 import os
 import json
+import re
 
 # 默认配置（DeepSeek 官方 API）
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -22,6 +23,20 @@ class LLMService:
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model or DEFAULT_MODEL
+
+    def _complete(self, system_prompt: str, user_prompt: str,
+                  temperature: float, max_tokens: int) -> str:
+        """执行一次 OpenAI 兼容对话请求，失败时由调用方决定如何处理。"""
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return (resp.choices[0].message.content or "").strip()
 
     def ask(self, query: str, context: list[str], top_k: int = 5) -> str:
         """检索 + LLM 生成回答
@@ -46,19 +61,59 @@ class LLMService:
         user_prompt = f"参考文档：\n{docs}\n\n问题：{query}"
 
         try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,
-                max_tokens=1024,
-            )
-            return resp.choices[0].message.content
+            return self._complete(system_prompt, user_prompt, 0.3, 1024)
         except Exception as e:
             return f"[LLM 调用失败: {e}]\n\n检索到以下相关内容（共 {len(context)} 条）：\n" + \
                    "\n---\n".join(context[:top_k])
+
+    def ask_with_sources(self, query: str, contexts: list[dict],
+                         top_k: int = 5, temperature: float = 0.3,
+                         max_tokens: int = 1024) -> str:
+        """基于带来源锚点的上下文生成答案，并要求使用 chunk 引用。
+
+        该方法用于离线生成评测。它会直接抛出 API 异常，避免把错误信息误当成
+        模型答案继续评分。
+        """
+        if not contexts:
+            return "未检索到相关内容，无法根据知识库给出结论。"
+
+        sections = []
+        for context in contexts[:top_k]:
+            chunk_id = context.get("id", f"chunk-{context.get('index', '?')}")
+            doc = context.get("doc", "未知文档")
+            page = context.get("page")
+            location = f"，第 {page} 页" if page is not None else ""
+            sections.append(
+                f"[{chunk_id}] 文档：{doc}{location}\n{context.get('text', '')}"
+            )
+
+        system_prompt = (
+            "你是一个知识库问答助手。只能依据给出的参考 chunk 回答。"
+            "每个可验证的事实结论后必须标注支持它的 chunk ID，格式如 [chunk-12]。"
+            "若参考内容不足以支持结论，明确回答‘提供的上下文中没有找到依据’，"
+            "不要补充外部知识或猜测。"
+        )
+        source_text = "\n\n---\n\n".join(sections)
+        user_prompt = f"参考 chunk：\n{source_text}\n\n问题：{query}"
+        return self._complete(system_prompt, user_prompt, temperature, max_tokens)
+
+    def complete_json(self, system_prompt: str, user_prompt: str,
+                      max_tokens: int = 2048) -> dict:
+        """请求模型只返回 JSON，并兼容常见的 Markdown 代码块包装。"""
+        raw = self._complete(system_prompt, user_prompt, 0.0, max_tokens)
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip()
+        try:
+            value = json.loads(cleaned)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if not match:
+                raise ValueError(f"模型未返回 JSON 对象：{raw[:200]}")
+            value = json.loads(match.group())
+        if not isinstance(value, dict):
+            raise ValueError("模型返回的 JSON 根节点必须是对象")
+        return value
 
     def rewrite(self, query: str) -> str:
         """将自然语言查询改写为关键词，适合向量检索"""

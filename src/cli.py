@@ -5,15 +5,15 @@ import jieba
 import torch
 from config import config
 from .logger import get_logger, setup_logging
-from .embedding import EmbeddingService
+from .services.embedding import EmbeddingService
 from .vector_store.faiss_store import FaissVectorStore
 from .vector_store.ivf_store import IvfVectorStore
 from .vector_store.hnsw_store import HnswVectorStore
-from .llm_service import LLMService
-from .retriever import Retriever
-from .ingestion import IngestionService
-from .reranker import Reranker
-from .index_service import IndexService
+from .retrieval.reranker import Reranker
+from .retrieval.retriever import Retriever
+from .services.index_service import IndexService
+from .services.ingestion import IngestionService
+from .services.llm_service import LLMService
 
 log = get_logger("cli")
 setup_logging(
@@ -68,10 +68,20 @@ def run():
 
     # 检索引擎
     cfg_reranker = config["reranker"]
+    reranker = None
     try:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        reranker = Reranker(cfg_reranker["model"], device=device)
-        log.info("重排序器已就绪", model=cfg_reranker["model"])
+        if not cfg_reranker.get("enabled", False):
+            log.info("重排序器已按配置关闭")
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            reranker = Reranker(
+                cfg_reranker["model"],
+                device=device,
+                local_files_only=cfg_reranker.get("local_files_only", False),
+            )
+            if cfg_reranker.get("preload", False):
+                reranker.preload()
+            log.info("重排序器已就绪", model=cfg_reranker["model"])
     except Exception as e:
         reranker = None
         log.warning("重排序器未加载", error=str(e))
@@ -271,8 +281,7 @@ def run():
             confirm = input().strip()
             if confirm == "yes":
                 index_service.clear()
-                retriever._tokenized.clear()
-                retriever._bm25 = None
+                retriever.clear_text_index()
                 log.info("所有数据已清空")
             else:
                 print("已取消")

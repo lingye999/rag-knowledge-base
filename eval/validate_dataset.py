@@ -1,6 +1,6 @@
-"""Validate evaluation dataset files.
+"""校验评测数据集文件的结构和引用文档。
 
-Usage:
+用法：
     python eval/validate_dataset.py
 """
 
@@ -13,7 +13,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 EVAL_DIR = ROOT / "eval"
+DATASET_DIR = EVAL_DIR / "datasets"
 MANIFEST_PATH = EVAL_DIR / "document_manifest.json"
+STRICT_RETRIEVAL_DATASETS = {
+    "smoke": DATASET_DIR / "retrieval_smoke.jsonl",
+    "dev": DATASET_DIR / "retrieval_dev.jsonl",
+    "test": DATASET_DIR / "retrieval_test.jsonl",
+}
+QA_DATASETS = {
+    "smoke": DATASET_DIR / "qa_smoke.jsonl",
+    "dev": DATASET_DIR / "qa_dev.jsonl",
+    "test": DATASET_DIR / "qa_test.jsonl",
+}
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -93,10 +104,15 @@ def validate_extraction(path: Path) -> tuple[int, set[str]]:
     return len(rows), {item["doc"] for item in rows}
 
 
-def validate_retrieval(path: Path) -> tuple[int, set[str]]:
+def validate_retrieval(path: Path, require_page_anchors: bool = False) -> tuple[int, set[str]]:
     rows = _load_jsonl(path)
     _check_ids(rows, path)
-    allowed_policies = {"same_chunk", "multi_chunk_same_doc"}
+    allowed_policies = {
+        "same_chunk",
+        "multi_chunk_same_doc",
+        "same_page",
+        "window_chunk",
+    }
     for item in rows:
         item_id = item["id"]
         _require(item, "query", path)
@@ -127,6 +143,10 @@ def validate_retrieval(path: Path) -> tuple[int, set[str]]:
                 page = group.get("page")
                 if page is not None and (not isinstance(page, int) or page < 1):
                     raise ValueError(f"{path}: {item_id} evidence page must be positive integer or null")
+                if require_page_anchors and page is None:
+                    raise ValueError(
+                        f"{path}: {item_id} positive evidence requires a page anchor"
+                    )
         _require(item, "query_type", path)
         _require(item, "difficulty", path)
         _require(item, "parser_mode", path)
@@ -135,11 +155,28 @@ def validate_retrieval(path: Path) -> tuple[int, set[str]]:
     }
 
 
-def validate_qa(path: Path) -> int:
+def _check_disjoint_queries(datasets: dict[str, list[dict]]):
+    seen = {}
+    for name in ("dev", "test"):
+        for item in datasets[name]:
+            query = item["query"]
+            if query in seen:
+                raise ValueError(
+                    f"retrieval {name} duplicates query from {seen[query]}: {query}"
+                )
+            seen[query] = name
+
+
+def validate_qa(path: Path, retrieval_ids: set[str]) -> int:
     rows = _load_jsonl(path)
     _check_ids(rows, path)
     for item in rows:
         item_id = item["id"]
+        retrieval_id = _require(item, "retrieval_id", path)
+        if not isinstance(retrieval_id, str) or not retrieval_id:
+            raise ValueError(f"{path}: {item_id} retrieval_id must be a non-empty string")
+        if retrieval_id not in retrieval_ids:
+            raise ValueError(f"{path}: {item_id} references unknown retrieval_id {retrieval_id}")
         _require(item, "query", path)
         _require(item, "expected_answer", path)
         facts = _require(item, "required_facts", path)
@@ -158,27 +195,39 @@ def main():
     extraction_count, extraction_docs = validate_extraction(
         EVAL_DIR / "extraction_checks.jsonl"
     )
-    retrieval_count, retrieval_docs = validate_retrieval(
-        EVAL_DIR / "retrieval_queries.jsonl"
-    )
-    _check_manifest(extraction_docs | retrieval_docs)
+    strict_rows = {}
+    strict_counts = {}
+    strict_docs = set()
+    for name, path in STRICT_RETRIEVAL_DATASETS.items():
+        count, docs = validate_retrieval(path, require_page_anchors=True)
+        strict_counts[name] = count
+        strict_docs.update(docs)
+        strict_rows[name] = _load_jsonl(path)
+    _check_disjoint_queries(strict_rows)
+    _check_manifest(extraction_docs | strict_docs)
     counts = {
         "extraction": extraction_count,
-        "retrieval": retrieval_count,
-        "qa": validate_qa(EVAL_DIR / "qa_golden.jsonl"),
     }
     for name, count in counts.items():
         print(f"{name}: {count} rows ok")
+    for name, count in strict_counts.items():
+        print(f"retrieval {name}: {count} rows ok (strict page anchors)")
+        qa_count = validate_qa(
+            QA_DATASETS[name], {row["id"] for row in strict_rows[name]}
+        )
+        print(f"qa {name}: {qa_count} rows ok")
 
     extraction_rows = _load_jsonl(EVAL_DIR / "extraction_checks.jsonl")
-    retrieval_rows = _load_jsonl(EVAL_DIR / "retrieval_queries.jsonl")
     extraction_anchored = sum(row.get("page") is not None for row in extraction_rows)
     evidence_groups = [
-        group for row in retrieval_rows for group in row.get("evidence", [])
+        group
+        for rows in strict_rows.values()
+        for row in rows
+        for group in row.get("evidence", [])
     ]
     evidence_anchored = sum(group.get("page") is not None for group in evidence_groups)
     print(f"extraction page anchors: {extraction_anchored}/{len(extraction_rows)}")
-    print(f"retrieval page anchors: {evidence_anchored}/{len(evidence_groups)}")
+    print(f"strict retrieval page anchors: {evidence_anchored}/{len(evidence_groups)}")
 
 
 if __name__ == "__main__":

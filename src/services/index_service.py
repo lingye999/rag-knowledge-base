@@ -1,5 +1,5 @@
 """Application service coordinating vector index and chunk records."""
-from .chunk_repository import ChunkRepository
+from ..retrieval.chunk_repository import ChunkRepository
 
 
 class IndexService:

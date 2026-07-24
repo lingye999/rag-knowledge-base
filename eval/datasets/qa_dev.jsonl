@@ -1,0 +1,6 @@
+{"id":"qa_dev_evac_001","retrieval_id":"dev_evac_001","query":"E-VAC 断路器允许的环境温度范围是多少？","expected_answer":"E-VAC 的周围空气温度不超过 40℃，最低温度为 -25℃。","required_facts":["40℃","-25℃"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_dev_evac_002","retrieval_id":"dev_evac_003","query":"E-VAC 断路器与哪种中压开关柜的外形尺寸和联锁方式完全兼容？","expected_answer":"E-VAC 与国内主流中压开关柜 KYN28 柜完全兼容。","required_facts":["KYN28","完全兼容"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_dev_med_001","retrieval_id":"dev_med_002","query":"医疗器械产业链下游列出了哪些客户或机构？","expected_answer":"下游包括各级医院、体检中心和家庭客户。","required_facts":["各级医院","体检中心","家庭客户"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_dev_gbz185_001","retrieval_id":"dev_gbz185_002","query":"GB/Z 185.4 适用于哪些方案的设计、实现和测试？","expected_answer":"该文件适用于人工智能智能体及其互联、协同方案的设计、实现和测试。","required_facts":["人工智能智能体","互联","协同方案"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_dev_gbz185_002","retrieval_id":"dev_gbz185_003","query":"标准中“智能体描述”被定义为什么类型的信息？","expected_answer":"智能体描述是用以描述智能体名称、功能等的机器及人类可理解的信息。","required_facts":["智能体名称","功能","机器及人类可理解的信息"],"forbidden_claims":[],"citation_required":true}
+{"id":"qa_dev_gbz185_003","retrieval_id":"dev_gbz185_006","query":"智能体支持的默认输入类型可以包括哪些示例？","expected_answer":"默认输入类型可包括文本、文件或图像。","required_facts":["文本、文件或图像"],"forbidden_claims":[],"citation_required":true}
