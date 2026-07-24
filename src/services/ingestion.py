@@ -2,8 +2,10 @@
 
 import os
 from dataclasses import replace
+from config import config as _cfg
 from ..parsing.cleaner import clean_ocr_text
 from ..parsing.document import read_file_structured
+from ..parsing.quality_gate import assess_parse_quality, needs_ocr_fallback
 from ..retrieval.chunker import chunk_blocks
 from ..retrieval.quality_scorer import compute_quality_scores
 
@@ -45,13 +47,46 @@ class IngestionService:
             use_marker=use_marker,
             allow_ocr=allow_ocr,
         )
+        quality_settings = _cfg.get("ingestion", {}).get("parse_quality", {})
+        initial_quality = assess_parse_quality(parsed.blocks)
+        if (
+            file_path.lower().endswith(".pdf")
+            and not force_ocr
+            and allow_ocr
+            and needs_ocr_fallback(initial_quality, quality_settings)
+        ):
+            print(
+                "[解析质量] 混合解析质量不足，尝试全页 OCR："
+                f"字符={initial_quality.total_chars}，"
+                f"可读率={initial_quality.readable_ratio:.0%}，"
+                f"乱码率={initial_quality.garbled_ratio:.0%}"
+            )
+            ocr_parsed = read_file_structured(
+                file_path,
+                force_ocr=True,
+                use_marker=False,
+                allow_ocr=True,
+            )
+            ocr_quality = assess_parse_quality(ocr_parsed.blocks)
+            if ocr_quality.score > initial_quality.score:
+                parsed = ocr_parsed
+                print("[解析质量] 已采用 OCR 结果")
+            else:
+                print("[解析质量] 保留原混合解析结果")
         doc_name = os.path.basename(file_path)
         cleaned_blocks = [
             replace(block, text=clean_ocr_text(block.text))
             for block in parsed.blocks
             if block.text.strip()
         ]
-        chunks = chunk_blocks(cleaned_blocks, chunk_method, doc_name)
+        page_context = _cfg["chunking"].get("page_context", {})
+        chunks = chunk_blocks(
+            cleaned_blocks,
+            chunk_method,
+            doc_name,
+            include_page_context=bool(page_context.get("enabled", False)),
+            page_context_max_chars=int(page_context.get("max_chars", 900)),
+        )
         if not chunks:
             print(f"[警告] 文件 {file_path} 未提取到有效文本块，已跳过")
             return 0, ""

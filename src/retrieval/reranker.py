@@ -11,16 +11,30 @@ class Reranker:
     """
 
     def __init__(self, model_name: str = "BAAI/bge-reranker-base",
-                 device: str = "cpu"):
+                 device: str = "cpu", local_files_only: bool = False):
         self.model_name = model_name
         self.device = device
+        self.local_files_only = local_files_only
         self._model = None
         print(f"[Reranker] 就绪（懒加载: {model_name}）")
+
+    @property
+    def is_loaded(self) -> bool:
+        """模型权重是否已经驻留在当前进程中。"""
+        return self._model is not None
+
+    def preload(self) -> None:
+        """在服务启动阶段预加载模型，避免首个检索请求承担加载延迟。"""
+        self._ensure_loaded()
 
     def _ensure_loaded(self):
         if self._model is None:
             print(f"[Reranker] 首次使用，加载模型 {self.model_name} ...")
-            self._model = CrossEncoder(self.model_name, device=self.device)
+            self._model = CrossEncoder(
+                self.model_name,
+                device=self.device,
+                local_files_only=self.local_files_only,
+            )
             print("[Reranker] 加载完成")
 
     def rerank(self, query: str, candidates: list[dict],

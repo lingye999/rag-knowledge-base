@@ -18,6 +18,7 @@ class ChunkRecord:
     quality: float = 0.5
     page: int | None = None
     source: str | None = None
+    chunk_type: str = "content"
     deleted: bool = False
 
 
@@ -42,6 +43,7 @@ class ChunkRepository:
             quality=float(metadata.get("quality", 0.5)),
             page=metadata.get("page"),
             source=metadata.get("source"),
+            chunk_type=metadata.get("chunk_type", "content"),
             deleted=self._store.is_deleted(index),
         )
 
@@ -58,6 +60,7 @@ class ChunkRepository:
             "quality": record.quality,
             "page": record.page,
             "source": record.source,
+            "chunk_type": record.chunk_type,
         }
 
     def all_texts(self, include_deleted: bool = True) -> list[str]:
@@ -92,7 +95,7 @@ class ChunkRepository:
         return names
 
     def add_batch(self, chunks, vectors, doc_name=None, qualities=None,
-                  pages=None, sources=None):
+                  pages=None, sources=None, chunk_types=None):
         """Store legacy text lists or structured :class:`Chunk` instances."""
         if chunks and isinstance(chunks[0], Chunk):
             chunk_docs = {chunk.doc for chunk in chunks}
@@ -103,6 +106,7 @@ class ChunkRepository:
             texts = [chunk.text for chunk in chunks]
             pages = [chunk.page for chunk in chunks]
             sources = [chunk.source for chunk in chunks]
+            chunk_types = [chunk.chunk_type for chunk in chunks]
             qualities = qualities or [chunk.quality for chunk in chunks]
         else:
             texts = chunks
@@ -113,6 +117,7 @@ class ChunkRepository:
             qualities=qualities,
             pages=pages,
             sources=sources,
+            chunk_types=chunk_types,
         )
 
     def delete_document(self, doc_name: str):

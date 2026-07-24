@@ -33,6 +33,7 @@ rag-knowledge-base/
 │   ├── generation_judge.py     # 生成侧 LLM 裁判
 │   ├── run_extraction_checks.py # 解析检查入口
 │   ├── run_baseline.py         # 检索基线入口
+│   ├── run_retrieval_diagnostics.py # 检索链路诊断报告
 │   ├── run_generation_eval.py  # 生成侧质量评测入口
 │   └── validate_dataset.py     # 测试集校验入口
 ├── main.py                    # CLI 入口
@@ -51,7 +52,13 @@ rag-knowledge-base/
 │   │   ├── chunk.py           # 带文档来源的检索单元
 │   │   ├── chunk_repository.py # chunk 文本与元数据访问边界
 │   │   ├── chunker.py         # 文本分块（5 种策略，参数可配置）
-│   │   ├── retriever.py       # Dense + BM25 → RRF → 3D → 精排
+│   │   ├── bm25_index.py      # BM25 关键词侧索引
+│   │   ├── first_stage.py     # Dense + BM25 → RRF → 三维度评分
+│   │   ├── document_recall.py # 文档内部补召回 + 邻居扩展
+│   │   ├── final_selector.py  # 最终重打分、精排、过滤和去重
+│   │   ├── result_utils.py    # 候选结果转换与按 index 去重
+│   │   ├── text_matching.py   # 查询词、锚点词和近重复判断
+│   │   ├── retriever.py       # 检索流程外观类，保留旧 API
 │   │   ├── reranker.py        # Cross-Encoder 精排器
 │   │   └── quality_scorer.py  # 动态质量评分 v2（统计 + OCR + jieba）
 │   ├── services/              # 向量化、入库、索引和 LLM 服务
@@ -123,6 +130,18 @@ python eval/run_baseline.py --dataset smoke --no-reranker
 python eval/run_baseline.py --dataset dev --no-reranker --report eval/reports/dev.json
 python eval/run_baseline.py --dataset test --no-reranker --report eval/reports/test.json
 ```
+
+检索链路诊断报告会按 `first_stage / doc_internal / expanded / final`
+拆开统计，定位证据是在首轮召回、文档内补召回、邻居扩展还是最终筛选阶段丢失：
+
+  ```powershell
+  python eval/run_retrieval_diagnostics.py --dataset smoke --no-reranker --only-query-docs --default-report
+  python eval/run_retrieval_diagnostics.py --dataset dev --ids ret_xxx --show-top 5 --report eval/reports/diag_ret_xxx.json
+  ```
+
+  精排模型在 `config/default.yaml` 的 `reranker` 中配置。`model` 指向本地快照、`preload: true` 和 `local_files_only: true` 时，系统启动即完成模型预加载，首个检索请求不会承担模型加载耗时。
+
+  BM25 的领域词典和受控查询扩展位于 `config/default.yaml` 的 `retrieval.bm25`。`domain_terms` 用规范词关联文档和查询中的别名，`query_rewrites` 仅追加高置信检索词；修改后应运行 `python eval/validate_dataset.py` 及 dev 集诊断报告验证效果。
 
 生成侧评测使用与检索集同名的 QA 集，并验证答案事实、上下文覆盖、引用有效性，以及可选的 LLM 忠实度裁判：
 

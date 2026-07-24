@@ -191,21 +191,44 @@ def chunk_text(text: str, method: str = "auto") -> list[str]:
         )
 
 
-def chunk_blocks(blocks: list[TextBlock], method: str, doc: str) -> list[Chunk]:
+def chunk_blocks(
+    blocks: list[TextBlock],
+    method: str,
+    doc: str,
+    include_page_context: bool = False,
+    page_context_max_chars: int = 900,
+) -> list[Chunk]:
     """Chunk parsed blocks without dropping their page and parser provenance.
 
     A chunk remains inside its source block. For PDFs this means a chunk never
     silently crosses a page boundary, so its page stays a valid citation anchor.
+    Short pages split into several chunks can additionally retain one complete
+    page-context chunk, preventing related table fields from being separated.
     """
     document_text = "\n".join(block.text for block in blocks)
     resolved_method = resolve_chunk_method(document_text, method)
     chunks = []
     for block in blocks:
-        for text in chunk_text(block.text, resolved_method):
+        block_chunks = chunk_text(block.text, resolved_method)
+        for text in block_chunks:
             chunks.append(Chunk(
                 text=text,
                 doc=doc,
                 page=block.page,
                 source=block.source,
+                chunk_type="content",
+            ))
+        if (
+            include_page_context
+            and block.page is not None
+            and len(block_chunks) > 1
+            and len(block.text) <= page_context_max_chars
+        ):
+            chunks.append(Chunk(
+                text=block.text,
+                doc=doc,
+                page=block.page,
+                source=block.source,
+                chunk_type="page_context",
             ))
     return chunks

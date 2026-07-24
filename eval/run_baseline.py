@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 
 from eval.evaluation import evaluate_retrieval, normalize
+from config import config
 from src.retrieval.reranker import Reranker
 from src.retrieval.retriever import Retriever
 from src.services.embedding import EmbeddingService
@@ -209,7 +210,14 @@ def run_baseline(
         if not use_reranker:
             raise RuntimeError("已通过 --no-reranker 禁用")
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        reranker = Reranker("BAAI/bge-reranker-base", device=device)
+        reranker_config = config["reranker"]
+        reranker = Reranker(
+            reranker_config["model"],
+            device=device,
+            local_files_only=reranker_config.get("local_files_only", False),
+        )
+        if reranker_config.get("preload", False):
+            reranker.preload()
     except Exception as exc:
         reranker = None
         print(f"  已跳过精排器：{exc}")

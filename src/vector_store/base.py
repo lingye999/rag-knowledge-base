@@ -55,7 +55,8 @@ class BaseVectorStore(ABC):
                   doc_name: str | None = None,
                   qualities: list[float] | None = None,
                   pages: list[int | None] | None = None,
-                  sources: list[str | None] | None = None):
+                  sources: list[str | None] | None = None,
+                  chunk_types: list[str] | None = None):
         """批量添加文本和向量
 
         自动写入 SQLite + 自动保存 FAISS（如果有 save 路径）
@@ -81,11 +82,13 @@ class BaseVectorStore(ABC):
                 entry["page"] = pages[i]
             if sources and i < len(sources) and sources[i] is not None:
                 entry["source"] = sources[i]
+            if chunk_types and i < len(chunk_types):
+                entry["chunk_type"] = chunk_types[i]
             self.meta.append(entry)
 
         # 增量写入 SQLite + 自动保存 FAISS
         self._sync_add_batch(
-            start, texts, vectors, doc_name, qualities, pages, sources
+            start, texts, vectors, doc_name, qualities, pages, sources, chunk_types
         )
         self._auto_save()
 
@@ -94,7 +97,8 @@ class BaseVectorStore(ABC):
                         doc_name: str | None,
                         qualities: list[float] | None,
                         pages: list[int | None] | None,
-                        sources: list[str | None] | None):
+                        sources: list[str | None] | None,
+                        chunk_types: list[str] | None):
         """INSERT 文本 + 向量 + 质量分到 SQLite"""
         if self._conn is None:
             return
@@ -104,11 +108,12 @@ class BaseVectorStore(ABC):
             q = qualities[i] if qualities and i < len(qualities) else 0.5
             page = pages[i] if pages and i < len(pages) else None
             source = sources[i] if sources and i < len(sources) else None
+            chunk_type = chunk_types[i] if chunk_types and i < len(chunk_types) else "content"
             vec_bytes = np.array(vectors[i], dtype=np.float32).tobytes()
             self._conn.execute(
-                "INSERT INTO chunks (position, text, doc_name, quality, page, source, vector) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (pos, text, doc, q, page, source, vec_bytes)
+                "INSERT INTO chunks (position, text, doc_name, quality, page, source, chunk_type, vector) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (pos, text, doc, q, page, source, chunk_type, vec_bytes)
             )
         self._conn.commit()
 
@@ -221,6 +226,7 @@ class BaseVectorStore(ABC):
                 quality REAL NOT NULL DEFAULT 0.5,
                 page INTEGER,
                 source TEXT,
+                chunk_type TEXT NOT NULL DEFAULT 'content',
                 vector BLOB,
                 deleted INTEGER NOT NULL DEFAULT 0
             )
@@ -230,6 +236,7 @@ class BaseVectorStore(ABC):
             ("quality", "REAL NOT NULL DEFAULT 0.5"),
             ("page", "INTEGER"),
             ("source", "TEXT"),
+            ("chunk_type", "TEXT NOT NULL DEFAULT 'content'"),
             ("vector", "BLOB"),
         ]:
             try:
@@ -250,6 +257,7 @@ class BaseVectorStore(ABC):
             quality = meta_entry.get("quality", 0.5) if meta_entry else 0.5
             page = meta_entry.get("page") if meta_entry else None
             source = meta_entry.get("source") if meta_entry else None
+            chunk_type = meta_entry.get("chunk_type", "content") if meta_entry else "content"
             deleted = 1 if pos in self.deleted else 0
             # 从 FAISS index 提取向量
             vec_bytes = None
@@ -259,16 +267,16 @@ class BaseVectorStore(ABC):
             except RuntimeError:
                 pass
             conn.execute(
-                "INSERT INTO chunks (position, text, doc_name, quality, page, source, vector, deleted) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (pos, text, doc_name, quality, page, source, vec_bytes, deleted)
+                "INSERT INTO chunks (position, text, doc_name, quality, page, source, chunk_type, vector, deleted) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (pos, text, doc_name, quality, page, source, chunk_type, vec_bytes, deleted)
             )
         conn.commit()
 
     def _rebuild_index_from_db(self, rows: list[tuple]) -> faiss.Index:
         """从 SQLite 行数据重建 FAISS 索引"""
         vecs = []
-        for _, _, _, _, _, _, vec_bytes, _ in rows:
+        for _, _, _, _, _, _, _, vec_bytes, _ in rows:
             if vec_bytes:
                 vec = np.frombuffer(vec_bytes, dtype=np.float32).reshape(1, -1)
                 vecs.append(vec[0])
@@ -287,7 +295,7 @@ class BaseVectorStore(ABC):
         """从 SQLite 读取全部数据到内存，并从向量重建 FAISS 索引"""
         conn = self._connect_db(path)
         cursor = conn.execute(
-            "SELECT position, text, doc_name, quality, page, source, vector, deleted "
+            "SELECT position, text, doc_name, quality, page, source, chunk_type, vector, deleted "
             "FROM chunks ORDER BY position"
         )
         rows = cursor.fetchall()
@@ -298,13 +306,14 @@ class BaseVectorStore(ABC):
         self.deleted = set()
         self.doc_registry = {}
 
-        for pos, text, doc_name, quality, page, source, _, deleted in rows:
+        for pos, text, doc_name, quality, page, source, chunk_type, _, deleted in rows:
             self.texts[pos] = text
             self.meta[pos] = {
                 "doc": doc_name,
                 "quality": quality,
                 "page": page,
                 "source": source,
+                "chunk_type": chunk_type or "content",
             }
             if deleted:
                 self.deleted.add(pos)

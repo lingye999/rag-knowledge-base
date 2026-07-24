@@ -16,6 +16,7 @@ from eval.run_generation_eval import (
     _load_retrieval_contracts,
     _select_qa_rows,
 )
+from eval.run_retrieval_diagnostics import diagnose_trace
 from src.parsing.document import read_file, read_file_structured
 
 
@@ -222,3 +223,117 @@ def test_structured_pdf_results_preserve_page_boundaries():
             assert read_file(path) == "one\ntwo"
     finally:
         os.remove(path)
+
+
+def test_retrieval_diagnostics_marks_final_selector_drop():
+    query = {
+        "id": "diag_positive",
+        "query": "rated voltage?",
+        "relevant_doc": "manual.pdf",
+        "evidence": [{"must_contain": ["rated voltage", "12kV"]}],
+    }
+    trace = {
+        "first_stage": [
+            {"doc": "manual.pdf", "text": "rated voltage: 12kV", "score": 0.9}
+        ],
+        "doc_internal": [],
+        "expanded": [
+            {"doc": "manual.pdf", "text": "rated voltage: 12kV", "score": 0.9}
+        ],
+        "final": [
+            {"doc": "manual.pdf", "text": "installation notes", "score": 0.8}
+        ],
+    }
+
+    result = diagnose_trace(query, trace, top_k=1)
+
+    assert result["diagnosis"] == "final_selector_dropped"
+    assert result["stage_scores"]["expanded"]["hit"]
+    assert not result["stage_scores"]["final"]["hit"]
+
+
+def test_retriever_trace_exposes_final_selector_decisions():
+    from src.retrieval.retriever import Retriever
+    from src.vector_store.faiss_store import FaissVectorStore
+
+    db = FaissVectorStore(2)
+    db.add_batch(
+        ["rated voltage 12kV", "installation notes"],
+        [[1.0, 0.0], [0.9, 0.1]],
+        doc_name="manual.pdf",
+    )
+    retriever = Retriever(db)
+
+    trace = retriever.search_with_trace(
+        "rated voltage",
+        [1.0, 0.0],
+        top_k=1,
+        threshold=0.0,
+    )
+
+    assert trace["final_selector"]["reason_counts"]["selected"] == 1
+    assert all("reason" in item for item in trace["final_selector"]["decisions"])
+
+
+def test_retriever_supports_fusion_ablation_modes_and_route_trace():
+    from src.retrieval.retriever import Retriever
+    from src.vector_store.faiss_store import FaissVectorStore
+
+    db = FaissVectorStore(2)
+    db.add_batch(
+        ["E-VAC rated voltage 12kV", "installation notes", "maintenance guide"],
+        [[1.0, 0.0], [0.9, 0.1], [0.8, 0.2]],
+        doc_name="manual.pdf",
+    )
+    retriever = Retriever(db)
+    retriever.add_texts(db.texts)
+
+    dense_trace = retriever.search_with_trace(
+        "E-VAC 12kV",
+        [1.0, 0.0],
+        top_k=1,
+        threshold=0.0,
+        fusion_mode="dense_only",
+    )
+    weighted_trace = retriever.search_with_trace(
+        "E-VAC 12kV",
+        [1.0, 0.0],
+        top_k=1,
+        threshold=0.0,
+        fusion_mode="rrf_weighted",
+    )
+
+    assert dense_trace["first_stage"][0]["fusion_mode"] == "dense_only"
+    assert dense_trace["first_stage"][0]["bm25_rank"] is None
+    weighted = weighted_trace["first_stage"][0]
+    assert weighted["fusion_mode"] == "rrf_weighted"
+    assert weighted["fusion_profile"] == "exact"
+    assert weighted["dense_rrf"] is not None
+    assert weighted["bm25_rrf"] is not None
+
+
+def test_retrieval_diagnostics_reports_negative_evidence_filtered_before_final():
+    query = {
+        "id": "diag_negative",
+        "query": "does it support bluetooth?",
+        "relevant_doc": None,
+        "evidence": [],
+        "forbidden_evidence": ["bluetooth remote control"],
+    }
+    trace = {
+        "first_stage": [
+            {"doc": "manual.pdf", "text": "bluetooth remote control", "score": 0.9}
+        ],
+        "doc_internal": [],
+        "expanded": [
+            {"doc": "manual.pdf", "text": "bluetooth remote control", "score": 0.9}
+        ],
+        "final": [
+            {"doc": "manual.pdf", "text": "rated voltage: 12kV", "score": 0.8}
+        ],
+    }
+
+    result = diagnose_trace(query, trace, top_k=1)
+
+    assert result["diagnosis"] == "unsafe_filtered_before_final_from_first_stage"
+    assert result["stage_scores"]["final"]["hit"]

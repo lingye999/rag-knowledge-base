@@ -20,18 +20,70 @@ chunking:
   size:
     chunk_size: 400
     overlap: 80
+  page_context:
+    enabled: true             # 短页面被切散时，额外保留完整页面上下文
+    max_chars: 900            # 超过该长度的页面不额外复制
 
 # 检索参数
 retrieval:
   top_k: 5
-  retrieve_top: 30           # internal candidate pool before final context selection
-  doc_recall_top_docs: 3     # high-scoring documents used for document-internal recall
-  doc_recall_per_doc: 5      # supplemental chunks per high-scoring document
-  neighbor_window: 1         # parent-child expansion window around candidate chunks
-  duplicate_threshold: 0.82  # character n-gram Jaccard threshold for final de-duplication
+  retrieve_top: 30           # 最终筛选前保留的内部候选池大小
+  doc_recall_top_docs: 3     # 文档内部补召回使用的高分文档数
+  doc_recall_per_doc: 5      # 每个高分文档最多补充的 chunk 数
+  neighbor_window: 1         # 候选 chunk 前后扩展窗口
+  duplicate_threshold: 0.82  # 最终去重的字符 n-gram Jaccard 阈值
+  page_context_max_final_chunks: 2  # 最终上下文中整页补充块的最大数量
   enable_doc_recall: true
   enable_neighbor_expand: true
+  enable_final_rescore: true
+  final_lexical_weight: 0.06
+  final_anchor_weight: 0.08
+  final_definition_weight: 0.06
+  final_definition_entry_weight: 0.12  # 章节术语定义项额外加分，避免被属性表压制
+  final_phrase_weight: 0.08       # 查询连续短语命中加分
+  final_numeric_weight: 0.60      # 数值问题的答案形态加分，保护已召回的数值证据
+  final_anchor_min_lexical_coverage: 0.25  # 型号锚点生效所需的正文词面覆盖
   rrf_k: 60
+  fusion_mode: "rrf_weighted"  # dense_only / bm25_only / rrf_equal / rrf_weighted
+  rrf_dense_weight: 1.0
+  rrf_bm25_weight: 1.0
+  weighted_rrf:
+    exact_dense_weight: 1.0
+    exact_bm25_weight: 1.6
+    semantic_dense_weight: 1.3
+    semantic_bm25_weight: 1.0
+  bm25:
+    k1: 1.5
+    b: 0.75
+    min_score: 0.0
+    enable_query_rewrite: true
+    # 规范词用于让文档和查询中的产品别名、字段名和缩写稳定对齐。
+    domain_terms:
+      - canonical: "agentid"
+        aliases: ["agent id", "智能体id", "智能体身份码"]
+      - canonical: "defaultinputtypes"
+        aliases: ["default input types", "默认输入类型", "默认输入形式"]
+      - canonical: "accessaddress"
+        aliases: ["access address", "智能体访问地址", "访问地址"]
+      - canonical: "真空灭弧室"
+        aliases: ["灭弧室", "vacuum interrupter"]
+    # 只扩展高置信查询词，避免宽泛同义词污染 BM25 排名。
+    query_rewrites:
+      - trigger: "跳闸"
+        expansions: ["分闸", "分闸时间"]
+      - trigger: "工作电压"
+        expansions: ["额定电压"]
+      - trigger: "智能体id"
+        expansions: ["agentId", "智能体身份码"]
+      - trigger: "默认输入形式"
+        expansions: ["defaultInputTypes", "默认输入类型"]
+      - trigger: "访问域名"
+        expansions: ["accessAddress", "FQDN", "访问地址"]
+  reranker:
+    max_candidates: 12       # 精排候选上限，避免 CPU 对过大候选池逐一计算
+    min_candidates: 3
+    ambiguous_score_gap: 0.06  # 前两名分差不大于该值时触发精排
+    complex_query_cues: ["是什么", "定义", "区别", "差异", "为什么", "如何", "哪些"]
   chunk_decay: 0.2         # Route B 几何衰减系数
   alpha: 0.7                # chunk 相关性权重
   beta: 0.1                 # 文档排名权重
@@ -59,11 +111,23 @@ llm:
 
 # 重排序器
 reranker:
-  model: "BAAI/bge-reranker-base"
+  # 使用已下载的模型快照，避免启动时访问 Hugging Face。
+  model: "D:/huggingface_cache/hub/models--BAAI--bge-reranker-base/snapshots/2cfc18c9415c912f9d8155881c133215df768a70"
+  enabled: false             # CPU 在线链路默认关闭；GPU 环境可显式开启
+  preload: false
+  local_files_only: true
 
 # 数据持久化
 data:
   save_path: "data/sessions/default"
+
+# 文档解析质量门控：混合解析质量不足时自动尝试全页 OCR。
+ingestion:
+  parse_quality:
+    enabled: true
+    min_total_chars: 80
+    min_readable_ratio: 0.55
+    max_garbled_ratio: 0.03
 
 # 日志
 logging:

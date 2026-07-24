@@ -6,4 +6,4 @@
 
 Positive retrieval rows require a document name, page anchor, and independent evidence phrases. Negative rows intentionally have no source page because they assert that unsupported evidence is absent.
 
-Only source-supported, parser-visible evidence belongs in a strict dataset. Add new candidate questions outside these files, review them against the source PDF and parsed text, then promote them into `dev` or `test` deliberately.
+Only source-supported, parser-visible evidence belongs in a strict dataset. Add new candidate questions outside these files, review them against the source PDF and parsed text, then promote them into `dev` or `test` deliberately. Alias, unit, field-name, OCR, cross-page, and negative cases should be represented explicitly so retrieval changes do not only optimize simple exact matches.

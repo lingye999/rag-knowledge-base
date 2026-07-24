@@ -11,3 +11,4 @@ class Chunk:
     page: int | None = None
     source: str | None = None
     quality: float = 0.5
+    chunk_type: str = "content"

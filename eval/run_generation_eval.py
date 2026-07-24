@@ -153,7 +153,14 @@ def _build_runtime(use_reranker: bool, judge_mode: str) -> EvaluationRuntime:
     if use_reranker:
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            reranker = Reranker(config["reranker"]["model"], device=device)
+            reranker_config = config["reranker"]
+            reranker = Reranker(
+                reranker_config["model"],
+                device=device,
+                local_files_only=reranker_config.get("local_files_only", False),
+            )
+            if reranker_config.get("preload", False):
+                reranker.preload()
         except Exception as exc:
             print(f"精排器不可用，使用基础检索：{exc}")
 
